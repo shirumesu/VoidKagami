@@ -1,0 +1,13 @@
+{
+  "name": "@voidkagami/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@voidkagami/ai": "workspace:*",
+    "typebox": "1.3.27"
+  }
+}

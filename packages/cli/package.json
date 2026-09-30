@@ -1,0 +1,8 @@
+{
+  "name": "@voidkagami/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "voidkagami": "./src/index.ts" },
+  "dependencies": { "@voidkagami/client": "workspace:*", "@voidkagami/protocol": "workspace:*", "@voidkagami/tui": "workspace:*" }
+}

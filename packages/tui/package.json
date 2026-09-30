@@ -1,0 +1,19 @@
+{
+  "name": "@voidkagami/tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "get-east-asian-width": "1.6.0",
+    "marked": "18.0.11"
+  },
+  "scripts": {
+    "build:native:darwin": "native/darwin/build.sh",
+    "build:native:linux": "native/linux/build.sh",
+    "build:native:win32": "node native/win32/build.mjs",
+    "build:native": "node native/build.ts"
+  }
+}

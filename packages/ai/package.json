@@ -1,0 +1,16 @@
+{
+  "name": "@voidkagami/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./oauth": "./src/oauth.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.124.0",
+    "openai": "7.19.0",
+    "partial-json": "0.1.7",
+    "typebox": "1.3.27"
+  }
+}

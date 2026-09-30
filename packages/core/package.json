@@ -1,0 +1,15 @@
+{
+  "name": "@voidkagami/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@voidkagami/ai": "workspace:*",
+    "@voidkagami/agent": "workspace:*",
+    "@voidkagami/protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "typebox": "^1.3.27",
+    "yaml": "^2.8.0"
+  }
+}
