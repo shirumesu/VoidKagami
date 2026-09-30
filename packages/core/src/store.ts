@@ -37,6 +37,7 @@ export class EventStore {
     session.updatedAt = event.timestamp;
     session.headId = event.type === "head.moved" ? event.data.headId as string : event.id;
     if (event.type === "session.renamed") session.title = event.data.title as string;
+    if (event.type === "session.archived") session.archived = Boolean(event.data.archived);
     if (event.type === "model.changed") session.model = event.data.model as Session["model"];
     if (event.type === "mode.changed") session.permissionMode = event.data.mode as Session["permissionMode"];
     if (event.type === "turn.started") session.status = "running";
@@ -56,10 +57,11 @@ export class EventStore {
     if (!session) throw new Error(`Session not found: ${id}`);
     return session;
   }
-  list(query = ""): Session[] {
+  list(query = "", archived?: boolean): Session[] {
     const rows = this.db.prepare("SELECT data FROM sessions WHERE title LIKE ? OR cwd LIKE ? ORDER BY updated_at DESC")
       .all(`%${query}%`, `%${query}%`);
-    return rows.map((row) => JSON.parse(row.data as string) as Session);
+    return rows.map((row) => JSON.parse(row.data as string) as Session)
+      .filter((session) => archived === undefined || Boolean(session.archived) === archived);
   }
   create(input: Omit<Session, "id" | "createdAt" | "updatedAt" | "headId" | "status">): Session {
     const now = new Date().toISOString();

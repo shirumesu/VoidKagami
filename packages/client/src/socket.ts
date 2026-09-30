@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { PROTOCOL_VERSION, VERSION } from "@voidkagami/protocol";
-import type { Method, RpcMethods, RpcResponse, RpcNotification, SessionEvent, SessionView } from "@voidkagami/protocol";
+import type { LiveEvent, Method, RpcMethods, RpcResponse, RpcNotification, SessionEvent, SessionView } from "@voidkagami/protocol";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
 export type ClientNotification = RpcNotification;
@@ -32,6 +32,7 @@ export class SocketClient extends EventEmitter {
   private nextId = 0;
   private pending = new Map<number, Pending>();
   private subscriptions = new Map<string, number>();
+  private liveCursors = new Map<string, { revision: number; epoch?: string }>();
   private connecting?: Promise<void>;
   private closed = false;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -139,6 +140,7 @@ export class SocketClient extends EventEmitter {
       for (const pending of this.pending.values()) pending.reject(new Error("Daemon connection closed"));
       this.pending.clear();
       this.setState("disconnected");
+      if (!this.closed) this.emit("disconnect", new Error("Daemon connection closed before the operation finished"));
       if (!this.closed && this.options.reconnect !== false) this.scheduleReconnect();
     });
   }
@@ -173,6 +175,14 @@ export class SocketClient extends EventEmitter {
       const seq = this.subscriptions.get(event.sessionId);
       if (seq !== undefined && event.seq <= seq) return;
       if (seq !== undefined) this.subscriptions.set(event.sessionId, event.seq);
+    }
+    if (message.method === "live") {
+      const event = message.params as LiveEvent;
+      if (event.liveRevision !== undefined) {
+        const cursor = this.liveCursors.get(event.sessionId);
+        if (cursor && cursor.epoch === event.liveEpoch && event.liveRevision <= cursor.revision) return;
+        this.liveCursors.set(event.sessionId, { revision: event.liveRevision, epoch: event.liveEpoch });
+      }
     }
     this.emit("notification", message);
     this.emit(message.method, message.params);
@@ -209,11 +219,17 @@ export class SocketClient extends EventEmitter {
     if (method === "session.attach") { const id = (params as { sessionId: string }).sessionId; if (!this.subscriptions.has(id)) this.subscriptions.set(id, 0); }
     const result = await this.send(method, params);
     if (method === "session.attach") this.trackView(result as SessionView);
-    if (method === "session.detach") this.subscriptions.delete((params as { sessionId: string }).sessionId);
+    if (method === "session.detach") {
+      const id = (params as { sessionId: string }).sessionId;
+      this.subscriptions.delete(id); this.liveCursors.delete(id);
+    }
     return result;
   }
 
-  private trackView(view: SessionView) { this.subscriptions.set(view.session.id, Math.max(this.subscriptions.get(view.session.id) || 0, ...view.events.map((event) => event.seq))); }
+  private trackView(view: SessionView) {
+    this.subscriptions.set(view.session.id, Math.max(this.subscriptions.get(view.session.id) || 0, view.eventSeq ?? 0, ...view.events.map((event) => event.seq)));
+    if (view.liveRevision !== undefined) this.liveCursors.set(view.session.id, { revision: view.liveRevision, epoch: view.liveEpoch });
+  }
 
   close() {
     this.closed = true;

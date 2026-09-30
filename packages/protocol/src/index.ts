@@ -1,14 +1,16 @@
 export const PROTOCOL_VERSION = 1;
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.1";
 
 export type PermissionMode = "ask" | "accept_edits" | "auto" | "plan";
 export type SessionStatus = "idle" | "running" | "waiting_approval" | "interrupted" | "completed" | "failed";
-export interface ModelSelection { provider: string; id: string; }
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export interface ModelSelection { provider: string; id: string; thinkingLevel?: ThinkingLevel; }
 export interface Attachment { type: "image" | "file"; path: string; }
 export interface Session {
   id: string;
   title: string;
   cwd: string;
+  projectPath?: string;
   createdAt: string;
   updatedAt: string;
   status: SessionStatus;
@@ -17,6 +19,7 @@ export interface Session {
   headId: string | null;
   parentSessionId?: string;
   worktree?: string;
+  archived?: boolean;
 }
 export interface SessionEvent {
   id: string;
@@ -29,6 +32,8 @@ export interface SessionEvent {
 }
 export interface LiveEvent {
   sessionId: string;
+  liveRevision?: number;
+  liveEpoch?: string;
   type: "assistant.delta" | "tool.progress" | "status.changed" | "auth.progress";
   data: Record<string, unknown>;
 }
@@ -53,13 +58,20 @@ export interface ContextInfo {
 export interface SessionView {
   session: Session;
   events: SessionEvent[];
+  eventSeq?: number;
   approvals: Approval[];
   context?: ContextInfo;
+  streaming?: string;
+  thinking?: string;
+  progress?: string;
+  liveRevision?: number;
+  liveEpoch?: string;
 }
 export interface ModelInfo extends ModelSelection {
   name: string;
   contextWindow: number;
   authenticated: boolean;
+  thinkingLevels: ThinkingLevel[];
 }
 export interface PermissionRule { tool: string; pattern?: string; arguments?: Record<string, string>; action: "allow" | "deny"; }
 export interface McpServerConfig {
@@ -100,7 +112,7 @@ export interface RpcMethods {
   "daemon.status": { params: Record<string, never>; result: { pid: number; running: number; sessions: number; uptime: number } };
   "daemon.stop": { params: Record<string, never>; result: { stopped: boolean } };
   "session.create": { params: { cwd: string; title?: string; model?: ModelSelection; permissionMode?: PermissionMode; worktree?: boolean; branch?: string; parentSessionId?: string }; result: Session };
-  "session.list": { params: { query?: string }; result: Session[] };
+  "session.list": { params: { query?: string; archived?: boolean }; result: Session[] };
   "session.attach": { params: { sessionId: string; afterSeq?: number }; result: SessionView };
   "session.detach": { params: { sessionId: string }; result: null };
   "session.send": { params: { sessionId: string; text: string; attachments?: Attachment[] }; result: { accepted: boolean } };
@@ -108,6 +120,7 @@ export interface RpcMethods {
   "session.followUp": { params: { sessionId: string; text: string; attachments?: Attachment[] }; result: { accepted: boolean } };
   "session.abort": { params: { sessionId: string }; result: null };
   "session.rename": { params: { sessionId: string; title: string }; result: Session };
+  "session.archive": { params: { sessionId: string; archived: boolean }; result: Session };
   "session.fork": { params: { sessionId: string; eventId?: string; worktree?: boolean }; result: Session };
   "session.rewind": { params: { sessionId: string; eventId: string; restoreFiles?: boolean }; result: Session };
   "session.context": { params: { sessionId: string }; result: ContextInfo };
@@ -121,6 +134,7 @@ export interface RpcMethods {
   "model.select": { params: { sessionId: string; model: ModelSelection }; result: Session };
   "auth.login": { params: { provider: string }; result: { loginId: string } };
   "auth.respond": { params: { loginId: string; value: string }; result: null };
+  "auth.cancel": { params: { loginId: string }; result: null };
   "auth.key": { params: { provider: string; apiKey: string }; result: null };
   "auth.logout": { params: { provider: string }; result: null };
   "auth.status": { params: Record<string, never>; result: { provider: string; type: string }[] };

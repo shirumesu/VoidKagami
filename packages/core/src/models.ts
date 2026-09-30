@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getModels, type Api, type Model } from "@voidkagami/ai";
+import { getModels, getSupportedThinkingLevels, type Api, type Model } from "@voidkagami/ai";
 import { openaiChatGPTOAuth, type OAuthCredential } from "@voidkagami/ai/oauth";
 import type { ModelInfo, ModelSelection } from "@voidkagami/protocol";
 import { ConfigStore, CredentialStore } from "./config.ts";
@@ -38,11 +38,12 @@ export class ModelRegistry {
   resolve(selection: ModelSelection): Model<Api> {
     const model = this.models().find((item) => item.provider === selection.provider && item.id === selection.id);
     if (!model) throw new Error(`Unknown model ${selection.provider}/${selection.id}. Add it to config.providers or choose from model.list.`);
+    if (selection.thinkingLevel && !getSupportedThinkingLevels(model).includes(selection.thinkingLevel)) throw new Error(`Unsupported thinking level for ${model.id}: ${selection.thinkingLevel}`);
     return model;
   }
   list(): ModelInfo[] {
     return this.models().map((model) => ({ provider: model.provider, id: model.id, name: model.name,
-      contextWindow: model.contextWindow, authenticated: Boolean(this.credentials.get(model.provider) || this.envKey(model.provider)) }));
+      contextWindow: model.contextWindow, thinkingLevels: getSupportedThinkingLevels(model), authenticated: Boolean(this.credentials.get(model.provider) || this.envKey(model.provider)) }));
   }
   async apiKey(provider: string): Promise<string | undefined> {
     const credential = this.credentials.get(provider);
@@ -88,9 +89,11 @@ export class ModelRegistry {
     const login: { controller: AbortController; respond?: (value: string) => void } = { controller };
     this.logins.set(loginId, login);
     setImmediate(() => {
+      if (controller.signal.aborted) return;
       void openaiChatGPTOAuth.login({
         signal: controller.signal,
         notify: (event) => {
+          if (controller.signal.aborted) return;
           if (event.type === "auth_url") this.notify({ loginId, type: "url", url: event.url, instructions: event.instructions });
           else this.notify({ loginId, ...event, type: "progress" });
         },
@@ -103,9 +106,10 @@ export class ModelRegistry {
           this.notify({ loginId, type: "prompt", message: prompt.message });
         }),
       }, { getDeviceId: () => this.deviceId() }).then((credential) => {
+        if (controller.signal.aborted) return;
         this.credentials.set(provider, credential);
         this.notify({ loginId, type: "complete", provider });
-      }).catch((error: Error) => this.notify({ loginId, type: "error", message: error.message }))
+      }).catch((error: Error) => { if (!controller.signal.aborted) this.notify({ loginId, type: "error", message: error.message }); })
         .finally(() => this.logins.delete(loginId));
     });
     return loginId;
@@ -115,6 +119,13 @@ export class ModelRegistry {
     if (!login?.respond) throw new Error("No login prompt is waiting");
     login.respond(value);
   }
+  cancel(loginId: string): void {
+    const login = this.logins.get(loginId);
+    if (!login) return;
+    this.logins.delete(loginId);
+    login.controller.abort();
+    this.notify({ loginId, type: "cancelled", message: "Sign-in cancelled" });
+  }
   get activeLogins(): number { return this.logins.size; }
   status(): { provider: string; type: string }[] {
     const records = Object.entries(this.credentials.all()).map(([provider, credential]) => ({ provider, type: credential.type }));
@@ -123,5 +134,5 @@ export class ModelRegistry {
     }
     return records;
   }
-  close(): void { for (const login of this.logins.values()) login.controller.abort(); }
+  close(): void { for (const loginId of this.logins.keys()) this.cancel(loginId); }
 }

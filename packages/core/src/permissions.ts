@@ -14,15 +14,15 @@ export function isReadOnlyTool(tool: string, _args: Record<string, unknown>): bo
 	return readTools.has(tool);
 }
 
-export function evaluatePermission(mode: PermissionMode, rules: PermissionRule[], tool: string, args: Record<string, unknown>): PermissionDecision {
+export function evaluatePermission(mode: PermissionMode, rules: PermissionRule[], tool: string, args: Record<string, unknown>, readOnly = isReadOnlyTool(tool, args)): PermissionDecision {
 	const matching = rules.filter((rule) => matchesPattern(tool, rule.tool)
 		&& (rule.pattern === undefined || matchesPattern(String(args.command ?? args.path ?? JSON.stringify(args)), rule.pattern))
 		&& Object.entries(rule.arguments ?? {}).every(([key, pattern]) => matchesPattern(String(args[key] ?? ""), pattern)));
 	if (matching.some((rule) => rule.action === "deny")) return "deny";
-	if (mode === "plan" && (tool === "bash" || !isReadOnlyTool(tool, args))) return "deny";
+	if (mode === "plan" && (tool === "bash" || !readOnly)) return "deny";
 	const explicit = matching.at(-1);
 	if (explicit) return explicit.action;
-	if (mode === "auto" || isReadOnlyTool(tool, args)) return "allow";
+	if (mode === "auto" || readOnly) return "allow";
 	if (mode === "accept_edits" && editTools.has(tool)) return "allow";
 	return "ask";
 }

@@ -7,6 +7,8 @@ export interface DesktopBridge {
   onConnection(listener: (state: string) => void): () => void;
   chooseFolder(): Promise<string | null>;
   chooseAttachments(): Promise<string[]>;
+  importAttachments(files: { name: string; data: ArrayBuffer }[]): Promise<string[]>;
+  setAppearance(appearance: { theme: "light" | "dark"; background: string }): Promise<void>;
   openExternal(url: string): Promise<void>;
 }
 

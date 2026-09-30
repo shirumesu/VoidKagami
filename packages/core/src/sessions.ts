@@ -30,6 +30,12 @@ interface PendingApproval {
   resolve: (response: { allow: boolean; answer?: string }) => void;
   reject: (error: Error) => void;
 }
+interface TransientState {
+  streaming: string;
+  thinking: string;
+  progress: string;
+  liveRevision: number;
+}
 
 export class SessionManager extends EventEmitter {
   readonly config: ConfigStore;
@@ -42,6 +48,8 @@ export class SessionManager extends EventEmitter {
   private extensions = new Map<string, ExtensionManager>();
   private mcps = new Map<string, McpManager>();
   private contexts = new Map<string, ContextInfo>();
+  private transient = new Map<string, TransientState>();
+  private liveEpoch = randomUUID();
   private operations = new Map<string, Promise<unknown>>();
   private closing = false;
   constructor(home?: string) {
@@ -57,11 +65,27 @@ export class SessionManager extends EventEmitter {
   }
   append(id: string, type: string, data: Record<string, unknown>): SessionEvent {
     const event = this.store.append(id, type, data);
+    if (["turn.started", "assistant.message", "turn.ended", "run.error", "run.interrupted"].includes(type)) {
+      const state = this.transient.get(id);
+      if (state) { state.streaming = ""; state.thinking = ""; state.progress = ""; }
+    }
+    if (type === "tool.call" || type === "tool.result") {
+      const state = this.transient.get(id);
+      if (state) state.progress = "";
+    }
     this.emit("event", event);
     return event;
   }
   live(id: string, type: LiveEvent["type"], data: Record<string, unknown>): void {
-    this.emit("live", { sessionId: id, type, data } satisfies LiveEvent);
+    const state = this.transient.get(id) ?? { streaming: "", thinking: "", progress: "", liveRevision: 0 };
+    if (type === "assistant.delta") state[data.thinking ? "thinking" : "streaming"] += String(data.delta ?? data.text ?? "");
+    if (type === "tool.progress") {
+      const result = data.result as { content?: { type: string; text?: string }[] } | undefined;
+      state.progress = String(data.text ?? data.output ?? result?.content?.filter((part) => part.type === "text").map((part) => part.text).join("\n") ?? data.tool ?? "Working…");
+    }
+    state.liveRevision++;
+    this.transient.set(id, state);
+    this.emit("live", { sessionId: id, type, data, liveRevision: state.liveRevision, liveEpoch: this.liveEpoch } satisfies LiveEvent);
   }
   get activeCount(): number { return this.runs.size + this.operations.size + this.tasks.list().filter((task) => task.status === "running").length + this.models.activeLogins; }
   async extension(cwd: string): Promise<ExtensionManager> {
@@ -77,6 +101,8 @@ export class SessionManager extends EventEmitter {
   async create(params: RpcMethods["session.create"]["params"]): Promise<Session> {
     let cwd = await realpath(resolve(params.cwd));
     if (!(await stat(cwd)).isDirectory()) throw new Error("Working directory must be a directory");
+    const parent = params.parentSessionId ? this.store.get(params.parentSessionId) : undefined;
+    const projectPath = parent ? parent.projectPath || parent.cwd : cwd;
     const config = this.config.get();
     const model = params.model || config.defaultModel;
     this.models.resolve(model);
@@ -86,14 +112,14 @@ export class SessionManager extends EventEmitter {
       cwd = info.path;
       worktree = info.path;
     }
-    const session = this.store.create({ title: params.title || "New session", cwd, model, permissionMode: params.permissionMode || config.permissionMode, parentSessionId: params.parentSessionId, worktree });
+    const session = this.store.create({ title: params.title || "New session", cwd, projectPath, model, permissionMode: params.permissionMode || config.permissionMode, parentSessionId: params.parentSessionId, worktree });
     this.emit("event", this.store.events(session.id)[0]);
     return session;
   }
   attach(id: string, afterSeq = 0): SessionView {
-    return { session: this.store.get(id), events: this.store.events(id, afterSeq),
+    return { session: this.store.get(id), events: this.store.events(id, afterSeq), eventSeq: this.store.events(id).at(-1)?.seq ?? 0,
       approvals: [...this.approvals.values()].filter((pending) => pending.approval.sessionId === id).map((pending) => pending.approval),
-      context: this.contexts.get(id) };
+      context: this.contexts.get(id), liveEpoch: this.liveEpoch, ...(this.transient.get(id) ?? { streaming: "", thinking: "", progress: "", liveRevision: 0 }) };
   }
   private assertIdle(id: string): Session {
     const session = this.store.get(id);
@@ -123,6 +149,7 @@ export class SessionManager extends EventEmitter {
     if (typeof hook.text === "string") text = hook.text;
     const promptText = typeof hook.additionalContext === "string" ? `${text}\n\n${hook.additionalContext}` : text;
     const message = await userMessage(promptText, attachments, session.cwd);
+    if (session.archived) this.append(id, "session.archived", { archived: false });
     if (this.runs.has(id)) { this.queueMessage(id, text, message, kind, attachments); return; }
     if (session.title === "New session") this.append(id, "session.renamed", { title: text.slice(0, 72).replace(/\s+/g, " ") });
     if (options) this.append(id, "session.configured", { ...options });
@@ -219,9 +246,9 @@ export class SessionManager extends EventEmitter {
       extension = await this.extension(session.cwd);
       const resources = extension;
       const config = this.config.get();
-      const authorize = async (tool: string, args: Record<string, unknown>, signal?: AbortSignal) => {
+      const authorize = async (tool: string, args: Record<string, unknown>, signal?: AbortSignal, readOnly?: boolean) => {
         const projectRules = await readFile(join(session.cwd, ".voidkagami", "permissions.json"), "utf8").then((data) => JSON.parse(data)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
-        const decision = evaluatePermission(session.permissionMode, [...this.config.get().rules, ...projectRules], tool, args);
+        const decision = evaluatePermission(session.permissionMode, [...this.config.get().rules, ...projectRules], tool, args, readOnly);
         if (decision === "deny") throw new Error(`Permission denied for ${tool} in ${session.permissionMode} mode`);
         if (decision === "ask") {
           const response = await this.requestApproval({ id: randomUUID(), sessionId: id, tool, args }, signal);
@@ -295,10 +322,10 @@ export class SessionManager extends EventEmitter {
         this.contexts.set(id, { components, estimated: true, tokens: components.reduce((sum, component) => sum + component.tokens, 0), limit: model.contextWindow,
           systemPrompt: prompt, messageCount: messages.length, skills: resources.catalog.skills, cost: this.cost(id) });
         const system = createInitialSystemMessage(prompt, availableTools.map(toToolDeclaration))!;
-        return { model, context: { messages: [system, ...messages], tools: availableTools } };
+        return { model, thinkingLevel: session.model.thinkingLevel ?? "off", context: { messages: [system, ...messages], tools: availableTools } };
       };
       const initial = conversation(this.store.branch(id));
-      const agent = new Agent({ initialState: { model: this.models.resolve(session.model), systemPrompt: await buildPrompt(), messages: initial, tools },
+      const agent = new Agent({ initialState: { model: this.models.resolve(session.model), thinkingLevel: session.model.thinkingLevel ?? "off", systemPrompt: await buildPrompt(), messages: initial, tools },
         streamFn: streamSimple, getApiKey: (provider) => this.models.apiKey(provider), sessionId: id, toolExecution: "parallel",
         prepareRequest: async () => {
           await resources.load();
@@ -403,6 +430,14 @@ export class SessionManager extends EventEmitter {
     });
   }
   rename(id: string, title: string): Session { this.append(id, "session.renamed", { title }); return this.store.get(id); }
+  async archive(id: string, archived: boolean): Promise<Session> {
+    return this.operate(id, async () => {
+      const session = archived ? this.assertIdle(id) : this.store.get(id);
+      if (archived && this.tasks.list(id).some((task) => task.status === "running")) throw new Error("Stop background tasks before archiving this session");
+      if (Boolean(session.archived) !== archived) this.append(id, "session.archived", { archived });
+      return session;
+    });
+  }
   selectModel(id: string, model: ModelSelection): Session {
     this.models.resolve(model);
     this.append(id, "model.changed", { model });
@@ -464,7 +499,7 @@ export class SessionManager extends EventEmitter {
     this.contexts.delete(id);
     return session;
   }
-  async fork(id: string, eventId?: string, worktree = true): Promise<Session> {
+  async fork(id: string, eventId?: string, worktree = false): Promise<Session> {
     return this.operate(id, () => this.forkIdle(id, eventId, worktree));
   }
   private async forkIdle(id: string, eventId: string | undefined, worktree: boolean): Promise<Session> {

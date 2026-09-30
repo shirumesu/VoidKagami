@@ -1,6 +1,6 @@
 {
   "name": "@voidkagami/desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "main": "dist/main.js",
@@ -9,15 +9,13 @@
     "build": "node scripts/build.ts",
     "package": "pnpm --dir ../.. build && pnpm build && electron-builder --dir"
   },
-  "dependencies": {
+  "devDependencies": {
     "@voidkagami/client": "workspace:*",
     "@voidkagami/protocol": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.0.0",
-    "remark-gfm": "^4.0.0"
-  },
-  "devDependencies": {
+    "remark-gfm": "^4.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "electron": "^41.0.0",
@@ -28,11 +26,34 @@
   "build": {
     "appId": "app.voidkagami.desktop",
     "productName": "VoidKagami",
-    "directories": { "output": "release" },
-    "files": ["dist/**/*", "package.json"],
-    "extraResources": [{ "from": "../../dist/daemon.js", "to": "daemon.js" }],
-    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg"] },
-    "linux": { "target": ["AppImage"] },
-    "win": { "target": ["nsis"] }
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../dist/daemon.js",
+        "to": "daemon.js"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
   }
 }

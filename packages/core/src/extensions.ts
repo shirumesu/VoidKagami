@@ -151,7 +151,7 @@ export async function runHooks(event: string, payload: Record<string, unknown>, 
 interface McpConnection { config: string; client: Client; tools: McpTool[]; }
 export interface McpToolContext {
 	cwd?: string;
-	authorize(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<void>;
+	authorize(tool: string, args: Record<string, unknown>, signal?: AbortSignal, readOnly?: boolean): Promise<void>;
 	beforeWrite(): Promise<void>;
 	emit?(type: string, payload: Record<string, unknown>): void | Promise<void>;
 }
@@ -201,7 +201,7 @@ export class McpManager {
 			parameters: tool.inputSchema as TSchema,
 			execute: async (_id, args, signal) => {
 				const name = `mcp__${server.replace(/[^\w-]/g, "_")}__${tool.name.replace(/[^\w-]/g, "_")}`;
-				await this.context.authorize(name, args as Record<string, unknown>, signal);
+				await this.context.authorize(name, args as Record<string, unknown>, signal, tool.annotations?.readOnlyHint === true);
 				if (!tool.annotations?.readOnlyHint) await this.context.beforeWrite();
 				const result = await connection.client.callTool({ name: tool.name, arguments: args as Record<string, unknown> }, undefined, { signal });
 				const content: AgentToolResult<unknown>["content"] = [];
