@@ -23,7 +23,7 @@ export class ModelPicker implements Component {
     this.input.focused = true;
   }
   invalidate() {}
-  setMaxVisible(rows: number) { this.maxVisible = Math.max(1, rows - 6); }
+  setMaxVisible(rows: number) { this.maxVisible = Math.max(1, rows); }
   private filtered() {
     const query = this.input.getValue().trim().toLowerCase();
     return this.models.filter((model) => `${model.name} ${model.provider}/${model.id}`.toLowerCase().includes(query));
@@ -31,8 +31,7 @@ export class ModelPicker implements Component {
   render(width: number) {
     const models = this.filtered();
     const start = Math.max(0, Math.min(this.selected - Math.floor(this.maxVisible / 2), models.length - this.maxVisible));
-    const border = this.theme.description("─".repeat(width));
-    const lines = [border, ...this.input.render(width), border];
+    const lines = this.input.render(width);
     const nameWidth = Math.min(36, Math.max(12, width - 30));
     for (let index = start; index < Math.min(models.length, start + this.maxVisible); index++) {
       const model = models[index]!;
@@ -41,17 +40,21 @@ export class ModelPicker implements Component {
       const level = this.levels.get(model)!;
       const effortIndex = model.thinkingLevels.indexOf(level);
       const effort = model.thinkingLevels.length > 1 ? `${active ? "← " : "  "}${"▪".repeat(effortIndex + 1)}${"·".repeat(model.thinkingLevels.length - effortIndex - 1)}${active ? " →" : "  "} ${statusLabel(level)}` : statusLabel(level);
-      const row = `${active ? "❯ " : "  "}${name}${" ".repeat(Math.max(1, nameWidth - visibleWidth(name) + 2))}${effort}`;
+      const number = index < 9 ? `${index + 1}. ` : "   ";
+      const prefix = active ? this.theme.selectedPrefix("› ") : "  ";
+      const row = `${prefix}${number}${name}${" ".repeat(Math.max(1, nameWidth - visibleWidth(name) + 2))}${effort}`;
       lines.push(truncateToWidth(active ? this.theme.selectedText(row) : row, width));
     }
     if (!models.length) lines.push(this.theme.noMatch(t("  No matching models", "  没有匹配的模型")));
     if (models.length > this.maxVisible) lines.push(this.theme.scrollInfo(`  ${this.selected + 1}/${models.length}`));
     const model = models[this.selected];
-    lines.push("", this.theme.description(truncateToWidth(model ? `  ${model.provider}/${model.id} · ${Math.round(model.contextWindow / 1000)}k ${t("context", "上下文")}` : "", width)), "", this.theme.description(truncateToWidth(t("↑↓ select · ←→ thinking effort · Enter confirm · Esc cancel", "↑↓ 选择模型 · ←→ 思考能力 · Enter 确认 · Esc 取消"), width)));
+    if (model) lines.push(this.theme.description(truncateToWidth(`  ${model.provider}/${model.id} · ${Math.round(model.contextWindow / 1000)}k ${t("context", "上下文")}`, width)));
+    lines.push(this.theme.description(truncateToWidth(t("↑↓ select · ←→ effort · enter confirm · 1-9 pick · esc cancel", "↑↓ 选择 · ←→ 思考能力 · enter 确认 · 1-9 快选 · esc 取消"), width)));
     return lines;
   }
   handleInput(data: string) {
     const models = this.filtered();
+    if (!this.input.getValue().trim() && /^[1-9]$/.test(data) && models[Number(data) - 1]) { const model = models[Number(data) - 1]!; this.onSelect?.({ provider: model.provider, id: model.id, thinkingLevel: this.levels.get(model) }); return; }
     if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) { this.onCancel?.(); return; }
     if (matchesKey(data, "enter")) {
       const model = models[this.selected];

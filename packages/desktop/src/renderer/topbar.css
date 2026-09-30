@@ -1,0 +1,22 @@
+.topbar { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 44px; min-height: 44px; padding: 0 14px; border-bottom: 1px solid var(--border); -webkit-app-region: drag; }
+.topbar button { -webkit-app-region: no-drag; }
+.topbar-leading, .title-path, .topbar-actions { display: flex; align-items: center; min-width: 0; }
+.topbar-leading { gap: 8px; flex: 1; }
+.traffic-light-placeholder { flex: 0 0 70px; }
+.sidebar-toggle { color: var(--text-secondary); }
+.title-path { gap: 8px; white-space: nowrap; }
+.title-path .workspace-link { max-width: 150px; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); padding: 5px 7px; }
+.title-path .separator { color: var(--text-tertiary); }
+.session-title-button { max-width: 360px; overflow: hidden; text-overflow: ellipsis; padding: 5px 7px; text-align: left; font-weight: 550; }
+.session-title-button:hover { background: var(--bg-hover); }
+.worktree-tag { color: var(--text-secondary); }
+.app-wordmark { color: var(--text-secondary); font-weight: 600; letter-spacing: -.02em; }
+.topbar-actions { flex: 0 0 auto; gap: 4px; font-size: var(--font-size-small); }
+.topbar-actions > button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+.topbar-actions > button.active { background: var(--bg-active); }
+.review-totals { display: inline-flex; gap: 4px; color: var(--text-tertiary); font-size: var(--font-size-meta); font-variant-numeric: tabular-nums; }
+.review-totals span:first-child { color: var(--success); }.review-totals span:last-child { color: var(--danger); }
+.topbar-spinner, .tool-spinner { width: 13px; height: 13px; border: 1.75px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spinner-rotate .8s linear infinite; }
+@keyframes spinner-rotate { to { transform: rotate(360deg); } }
+.approval-dot { margin-right: 1px; }
+@media (max-width: 1050px) { .topbar { padding: 0 9px; gap: 5px; }.title-path { gap: 4px; }.session-title-button { max-width: 210px; }.topbar-actions { gap: 0; }.topbar-actions > button { padding: 6px; } }

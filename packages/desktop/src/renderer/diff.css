@@ -1,22 +1,27 @@
 .review-panel-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.review-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 12px; gap: 8px; border-bottom: 1px solid var(--border); }
-.review-scope { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--background); border-radius: 24px; padding: 3px 12px 3px 3px; }
-.review-scope select { border: 0; background: transparent; padding: 7px; min-width: 86px; }
-.review-menu-container { position: relative; }
-.review-menu-button { font-size: calc(var(--ui-font-size) + 8px); width: 36px; height: 36px; line-height: 20px; border-radius: 50%; padding: 0; }
-.review-menu { position: absolute; top: calc(100% + 7px); right: 0; width: max-content; min-width: 190px; background: var(--background); border: 1px solid var(--border); border-radius: 12px; padding: 7px; box-shadow: 0 8px 30px var(--shadow); z-index: 20; }
-.review-menu button { display: block; width: 100%; padding: 10px 12px; text-align: left; }
-.review-branch { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); }
-.review-branch > span:first-child { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-branch select { min-width: 0; flex: 1; background: transparent; border: 0; }
-.review-error { color: var(--danger); padding: 18px; line-height: 1.6; overflow-wrap: anywhere; }
-.review-panel-content .diff-file-toggle { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 15px 13px; text-align: left; }
-.diff-file-icon { font: 9px var(--code-font-family); color: var(--text-secondary); background: var(--surface-selected); border-radius: 4px; width: 23px; flex: 0 0 23px; padding: 3px 0; text-align: center; }
-.diff-chevron { color: var(--text-muted); margin-right: 5px; }
-.review-panel-content .diff-code { overflow: auto; font: var(--code-font-size)/1.6 var(--code-font-family); }
-.review-panel-content .diff-code .diff-line { display: flex; padding: 0; min-width: 100%; width: max-content; }
-.diff-line-number { width: 4ch; flex: 0 0 4ch; padding: 0 4px; text-align: right; color: var(--text-muted); user-select: none; opacity: .75; }
-.diff-line code { padding: 0 12px 0 6px; white-space: pre; color: var(--foreground); }
-.review-panel-content .diff-code .diff-hunk { color: var(--text-muted); padding: 10px; margin: 4px; background: var(--surface-raised); border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.diff-rename { padding: 10px 14px; }
-.review-panel-content .empty-diff { padding: 20px; text-align: center; line-height: 1.6; }
+.review-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.review-toolbar-left { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.review-scope .menu-trigger { gap: 8px; padding: 6px 9px; border-radius: var(--radius); font-size: var(--font-size-meta); }
+.review-menu-container .menu-trigger { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
+.review-branch { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: var(--font-size-meta); }
+.review-branch > span:first-child { max-width: 35%; overflow: hidden; color: var(--text-secondary); text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-code); }
+.review-branch .select-control { min-width: 0; flex: 1; }.review-branch select { padding: 5px 28px 5px 7px; border: 0; background-color: transparent; font: var(--code-font-size) var(--font-code); }
+.review-error { padding: 16px; color: var(--danger); font-size: var(--font-size-small); line-height: 1.5; overflow-wrap: anywhere; }
+.diff-files { flex: 1; min-height: 0; overflow: auto; }
+.diff-file-toggle { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 42px; padding: 7px 12px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: var(--bg); text-align: left; }
+.diff-file-status { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: 0 0 20px; border-radius: var(--radius-sm); background: var(--bg-subtle); color: var(--accent); font: var(--font-size-micro) var(--font-code); }
+.diff-file-status.status-added { background: var(--success-subtle); color: var(--success); }.diff-file-status.status-deleted { background: var(--danger-subtle); color: var(--danger); }.diff-file-status.status-renamed { background: var(--accent-subtle); color: var(--accent-2); }
+.diff-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--code-font-size) var(--font-code); }
+.diff-directory { color: var(--text-tertiary); }
+.diff-chevron { display: inline-flex; color: var(--text-tertiary); }.diff-chevron .ui-icon { width: 13px; height: 13px; }
+.diff-counts { display: inline-flex; gap: 6px; white-space: nowrap; font: var(--font-size-micro) var(--font-code); }
+.diff-add-count { color: var(--success); }.diff-remove-count { color: var(--danger); }
+.diff-rename { padding: 8px 14px; color: var(--text-tertiary); font-size: var(--font-size-meta); }
+.diff-code { overflow: auto; white-space: pre; font: var(--code-font-size)/1.6 var(--font-code); }
+.diff-code .diff-line { display: flex; width: max-content; min-width: 100%; padding: 0; }
+.diff-line-number { width: 4ch; flex: 0 0 4ch; padding: 0 4px; color: var(--text-tertiary); opacity: .8; text-align: right; user-select: none; }
+.diff-line code { padding: 0 12px 0 6px; color: var(--text); white-space: pre; }
+.diff-code .added { background: var(--success-subtle); }.diff-code .added code { color: var(--success); }
+.diff-code .removed { background: var(--danger-subtle); }.diff-code .removed code { color: var(--danger); }
+.diff-code .diff-hunk { margin: 4px 0; padding: 8px 11px; background: var(--bg-subtle); color: var(--text-tertiary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.empty-diff { margin: auto; padding: 20px; color: var(--text-tertiary); text-align: center; font-size: var(--font-size-small); line-height: 1.6; }

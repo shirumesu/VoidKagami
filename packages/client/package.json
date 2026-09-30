@@ -3,6 +3,6 @@
   "version": "0.1.2",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./store": "./src/store.ts" },
+  "exports": { ".": "./src/index.ts", "./store": "./src/store.ts", "./presentation": "./src/presentation.ts", "./fixtures/demo": "./fixtures/demo.ts", "./fixtures/mock-client": "./fixtures/mock-client.ts" },
   "dependencies": { "@voidkagami/protocol": "workspace:*" }
 }

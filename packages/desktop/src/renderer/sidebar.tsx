@@ -1,11 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { isBusy } from "@voidkagami/protocol";
 import type { Session } from "@voidkagami/protocol";
+import { statusText, statusTone } from "@voidkagami/client/presentation";
 import { Icon } from "./icons.tsx";
 import { useI18n } from "./i18n.ts";
+import "./sidebar.css";
 
 export const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 export const sessionProject = (session: Session): string | null => session.projectPath === null ? null : session.projectPath || session.cwd;
+function relativeTime(value: string, t: (english: string, chinese: string) => string) {
+  const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 60000));
+  if (!Number.isFinite(minutes) || minutes < 1) return t("now", "刚刚");
+  if (minutes < 60) return t(`${minutes}m`, `${minutes} 分钟`);
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t(`${hours}h`, `${hours} 小时`);
+  if (hours < 48) return t("yesterday", "昨天");
+  return t(`${Math.floor(hours / 24)}d`, `${Math.floor(hours / 24)} 天`);
+}
 
 function useStoredList(key: string) {
   const [value, setValue] = useState<string[]>(() => JSON.parse(localStorage.getItem(key) || "[]") as string[]);
@@ -13,8 +24,8 @@ function useStoredList(key: string) {
   return [value, setValue] as const;
 }
 
-export function Sidebar({ sessions, selected, settingsOpen, connection, onSelect, onNew, onArchive, onSettings, chooseProject }: {
-  sessions: Session[]; selected: string | null; settingsOpen: boolean; connection: string;
+export function Sidebar({ sessions, selected, settingsOpen, connection, searchRef, onSelect, onNew, onArchive, onSettings, chooseProject }: {
+  sessions: Session[]; selected: string | null; settingsOpen: boolean; connection: string; searchRef?: React.RefObject<HTMLInputElement | null>;
   onSelect: (id: string) => void; onNew: (cwd?: string) => void; onArchive: (session: Session) => void;
   onSettings: () => void; chooseProject: () => Promise<string | null>;
 }) {
@@ -31,6 +42,7 @@ export function Sidebar({ sessions, selected, settingsOpen, connection, onSelect
   const groups = useMemo(() => [...new Set([...projects, ...sessions.filter((session) => !session.archived).map(sessionProject).filter((path): path is string => path !== null)])], [projects, sessions]);
   const visible = active.filter((session) => `${session.title} ${sessionProject(session) || ""}`.toLowerCase().includes(filter.toLowerCase()));
   const matchingGroups = groups.filter((cwd) => !filter || cwd.toLowerCase().includes(filter.toLowerCase()) || visible.some((session) => sessionProject(session) === cwd));
+  const recentSessions = visible.filter((session) => sessionProject(session) === null && !pinnedSessions.includes(session.id)).slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const toggle = (items: string[], value: string) => items.includes(value) ? items.filter((item) => item !== value) : [...items, value];
   function moveProject(target: string, pinned: boolean, after: boolean) {
     const source = dragged.current;
@@ -88,7 +100,7 @@ export function Sidebar({ sessions, selected, settingsOpen, connection, onSelect
     return <div className={`session-row ${nested ? "nested" : ""} ${selected === session.id && !settingsOpen ? "selected" : ""}`} key={session.id}>
       <button className="session-link" onClick={() => onSelect(session.id)} title={session.title}>
         <span className="session-name">{session.title === "New session" ? t("New chat", "新聊天") : session.title}</span>
-        {isBusy(session.status) && <span className={`status-dot ${session.status}`} />}
+        <span className="session-indicator">{session.status === "running" ? <span className="session-status-spinner" title={statusText(session.status, t)} aria-label={statusText(session.status, t)} /> : session.status === "waiting_approval" || session.status === "failed" ? <span className={`status-dot tone-${statusTone(session.status)}`} title={statusText(session.status, t)} aria-label={statusText(session.status, t)} /> : <time dateTime={session.updatedAt} title={new Date(session.updatedAt).toLocaleString()}>{relativeTime(session.updatedAt, t)}</time>}</span>
       </button>
       <div className="session-row-actions">
         <button className="small-icon" aria-label={pinnedSessions.includes(session.id) ? t("Unpin chat", "取消置顶聊天") : t("Pin chat", "置顶聊天")} title={pinnedSessions.includes(session.id) ? t("Unpin chat", "取消置顶聊天") : t("Pin chat", "置顶聊天")} onClick={() => setPinnedSessions((items) => toggle(items, session.id))}><Icon name="pin" /></button>
@@ -100,7 +112,7 @@ export function Sidebar({ sessions, selected, settingsOpen, connection, onSelect
     const expanded = !collapsed.includes(cwd) || Boolean(filter);
     return <div className={`project-group ${dropTarget?.path === cwd ? dropTarget.after ? "drop-after" : "drop-before" : ""}`} key={cwd}>
       <div className="project-heading" data-project-path={cwd} data-pinned={pinned}>
-        <button className="project-title" title={cwd} aria-expanded={expanded} onPointerDown={(event) => startProjectDrag(event, cwd)} onClick={(event) => { if (ignoreClick.current && event.detail !== 0) { event.preventDefault(); return; } setCollapsed((items) => toggle(items, cwd)); }}><Icon name={expanded ? "folder-open" : "folder"} /><span className="project-name">{baseName(cwd)}</span></button>
+        <button className="project-title" title={cwd} aria-expanded={expanded} onPointerDown={(event) => startProjectDrag(event, cwd)} onClick={(event) => { if (ignoreClick.current && event.detail !== 0) { event.preventDefault(); return; } setCollapsed((items) => toggle(items, cwd)); }}><span className="project-icons"><Icon name="chevron" className={`project-chevron ${expanded ? "expanded" : ""}`} /><Icon name={expanded ? "folder-open" : "folder"} className="project-folder" /></span><span className="project-name">{baseName(cwd)}</span></button>
         <div className="project-row-actions"><button className="small-icon" title={pinned ? t("Unpin project", "取消置顶项目") : t("Pin project", "置顶项目")} aria-label={pinned ? t("Unpin project", "取消置顶项目") : t("Pin project", "置顶项目")} onClick={() => setPinnedProjects((items) => toggle(items, cwd))}><Icon name="pin" /></button><button className="small-icon" aria-label={`${t("New chat in", "新建聊天于")} ${baseName(cwd)}`} title={t("New chat in project", "在项目中新建聊天")} onClick={() => { setCollapsed((items) => items.filter((path) => path !== cwd)); onNew(cwd); }}><Icon name="plus" /></button></div>
       </div>
       {expanded && visible.filter((session) => sessionProject(session) === cwd).map((session) => sessionRow(session, true))}
@@ -108,14 +120,14 @@ export function Sidebar({ sessions, selected, settingsOpen, connection, onSelect
   }
   return <aside className="sidebar">
     <div className="traffic-space" />
-    <button className="new-chat" onClick={() => onNew()}><Icon name="compose" />{t("New chat", "新聊天")}</button>
-    <input className="sidebar-search" placeholder={t("Search chats", "搜索聊天")} aria-label={t("Search chats", "搜索聊天")} value={filter} onChange={(event) => setFilter(event.target.value)} />
+    <button className="new-chat" onClick={() => onNew()}><Icon name="compose" /><span>{t("New chat", "新聊天")}</span><kbd>⌘N</kbd></button>
+    <label className="sidebar-search-row" title={t("Search chats · ⌘K", "搜索聊天 · ⌘K")}><Icon name="search" /><input ref={searchRef} className="sidebar-search" placeholder={t("Search", "搜索")} aria-label={t("Search chats", "搜索聊天")} value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
     <div className="project-list">
-      {(pinnedProjects.length > 0 || pinnedSessions.some((id) => visible.some((session) => session.id === id))) && <section className="sidebar-section"><div className="section-label">{t("Pinned", "置顶")}</div>{matchingGroups.filter((cwd) => pinnedProjects.includes(cwd)).map((cwd) => projectRow(cwd, true))}{visible.filter((session) => pinnedSessions.includes(session.id)).map((session) => sessionRow(session))}</section>}
+      {(pinnedProjects.length > 0 || pinnedSessions.some((id) => visible.some((session) => session.id === id))) && <section className="sidebar-section"><div className="section-label"><span>{t("Pinned", "置顶")}</span><button className="small-icon" aria-label={t("New chat", "新聊天")} title={t("New chat", "新聊天")} onClick={() => onNew()}><Icon name="plus" /></button></div>{matchingGroups.filter((cwd) => pinnedProjects.includes(cwd)).map((cwd) => projectRow(cwd, true))}{visible.filter((session) => pinnedSessions.includes(session.id)).map((session) => sessionRow(session))}</section>}
       <section className="sidebar-section"><div className="section-label"><span>{t("Projects", "项目")}</span><button className="small-icon" aria-label={t("Add project", "添加项目")} title={t("Add project", "添加项目")} onClick={() => void chooseProject().then((path) => { if (path) setProjects((items) => [...new Set([...items, path])]); })}><Icon name="plus" /></button></div>{matchingGroups.filter((cwd) => !pinnedProjects.includes(cwd)).map((cwd) => projectRow(cwd, false))}</section>
-      <section className="sidebar-section"><div className="section-label">{t("Recents", "最近")}</div>{visible.filter((session) => !pinnedSessions.includes(session.id)).slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((session) => sessionRow(session))}{!visible.length && <p className="sidebar-empty">{filter ? t("No matching chats.", "没有匹配的聊天。") : t("Your chats will appear here.", "你的聊天会显示在这里。")}</p>}</section>
+      {recentSessions.length > 0 && <section className="sidebar-section"><div className="section-label"><span>{t("Recents", "最近")}</span><button className="small-icon" aria-label={t("New chat", "新聊天")} title={t("New chat", "新聊天")} onClick={() => onNew()}><Icon name="plus" /></button></div>{recentSessions.map((session) => sessionRow(session))}</section>}
     </div>
-    <div className="sidebar-bottom"><button className={settingsOpen ? "active" : ""} onClick={onSettings}><Icon name="settings" /><span>{t("Settings", "设置")}</span></button><span className={`connection ${connection === "connected" ? "" : "offline"}`} title={connection}>{connection === "connected" ? t("Connected", "已连接") : connection === "connecting" || connection === "reconnecting" ? t("Connecting…", "连接中…") : t("Disconnected", "已断开")}</span></div>
+    <div className="sidebar-bottom"><button className={settingsOpen ? "active" : ""} onClick={onSettings}><Icon name="settings" /><span>{t("Settings", "设置")}</span><kbd>⌘,</kbd></button>{connection !== "connected" && <span className="connection offline" role="status" title={connection}>{connection === "connecting" || connection === "reconnecting" ? t("Connecting…", "连接中…") : t("Disconnected", "已断开")}</span>}</div>
   </aside>;
 }
 

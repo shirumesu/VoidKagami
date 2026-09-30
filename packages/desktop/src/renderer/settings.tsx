@@ -1,16 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Config, Language, ModelInfo, PermissionMode, Session } from "@voidkagami/protocol";
+import { modeText } from "@voidkagami/client/presentation";
 import { AppearanceSettings } from "./appearance.tsx";
+import { Icon } from "./icons.tsx";
+import { Select } from "./select.tsx";
 import { applyLanguage, useI18n } from "./i18n.ts";
 import "./settings.css";
 
-type Section = "general" | "appearance" | "accounts" | "archived" | "advanced";
+export type SettingsSection = "general" | "appearance" | "accounts" | "archived" | "advanced";
 interface SettingsProps {
   close: () => void;
   onRestored: (session: Session) => void;
   onConfigChanged: () => Promise<void> | void;
   auth: Record<string, unknown> | null;
-  initialSection?: Section;
+  initialSection?: SettingsSection;
 }
 const api = window.voidkagami;
 const modelValue = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
@@ -18,7 +21,7 @@ const parseModel = (value: string) => ({ provider: value.slice(0, value.indexOf(
 
 export function SettingsPage({ close, onRestored, onConfigChanged, auth, initialSection = "general" }: SettingsProps) {
   const { t, language, setLanguage } = useI18n();
-  const [section, setSection] = useState<Section>(initialSection);
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   const [config, setConfig] = useState<Config>();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [raw, setRaw] = useState("");
@@ -74,26 +77,28 @@ export function SettingsPage({ close, onRestored, onConfigChanged, auth, initial
     activeLogin.current = undefined; setLoginId(undefined); setLoggingIn(false);
     if (loginId) await api.request("auth.cancel", { loginId });
   };
-  const sections: { id: Section; label: string }[] = [
-    { id: "general", label: t("General", "通用") }, { id: "appearance", label: t("Appearance", "外观") },
-    { id: "accounts", label: t("Accounts", "账户") }, { id: "archived", label: t("Archived chats", "已归档的会话") },
-    { id: "advanced", label: t("Advanced", "高级") },
+  const sections: { id: SettingsSection; label: string; icon: "sliders" | "palette" | "user" | "archive" | "braces" }[] = [
+    { id: "general", label: t("General", "通用"), icon: "sliders" }, { id: "appearance", label: t("Appearance", "外观"), icon: "palette" },
+    { id: "accounts", label: t("Accounts", "账户"), icon: "user" }, { id: "archived", label: t("Archived chats", "已归档的会话"), icon: "archive" },
+    { id: "advanced", label: t("Advanced", "高级"), icon: "braces" },
   ];
-  const permissions: [PermissionMode, string][] = [["ask", t("Ask before changes", "更改前询问")], ["accept_edits", t("Accept file edits", "允许文件编辑")], ["auto", t("Fully automatic", "完全自动")], ["plan", t("Plan · read only", "计划 · 只读")]];
+  const permissions: PermissionMode[] = ["ask", "accept_edits", "auto", "plan"];
   const activeAuth = auth?.loginId === loginId ? auth : null;
   return <section className="settings-page" aria-label={t("Settings", "设置")}>
-    <header className="settings-page-header"><h2>{t("Settings", "设置")}</h2><button onClick={close}>{t("Back to chat", "返回聊天")}</button></header>
+    <header className="settings-page-header"><h2>{t("Settings", "设置")}</h2><button onClick={close}><Icon name="chevron-left" />{t("Back to chat", "返回聊天")}</button></header>
     <div className="settings-layout">
-      <nav className="settings-navigation" aria-label={t("Settings categories", "设置分类")}>{sections.map((item) => <button key={item.id} className={section === item.id ? "selected" : ""} aria-current={section === item.id ? "page" : undefined} onClick={() => { setSection(item.id); setError(""); setSaved(false); }}>{item.label}</button>)}</nav>
+      <nav className="settings-navigation" aria-label={t("Settings categories", "设置分类")}>{sections.map((item) => <button key={item.id} className={section === item.id ? "selected" : ""} aria-current={section === item.id ? "page" : undefined} onClick={() => { setSection(item.id); setError(""); setSaved(false); }}><Icon name={item.icon} />{item.label}</button>)}</nav>
       <div className="settings-content" key={section}>
         <h2>{sections.find((item) => item.id === section)!.label}</h2>
         {error && <div className="settings-error" role="alert">{error}</div>}
         {section === "general" && config && <>
-          <label>{t("Language", "语言")}<select value={language} onChange={(event) => act(async () => { await setLanguage(event.target.value as Language); await load(); })}><option value="zh-CN">简体中文</option><option value="en">English</option></select></label>
-          <label>{t("Default model", "默认模型")}<select value={modelValue(config.defaultModel)} onChange={(event) => act(() => save({ defaultModel: parseModel(event.target.value) }))}>{!models.some((model) => modelValue(model) === modelValue(config.defaultModel)) && <option value={modelValue(config.defaultModel)} disabled>{`${config.defaultModel.id} · ${t("Current default", "当前默认")}`}</option>}{models.map((model) => <option key={modelValue(model)} value={modelValue(model)}>{model.name}</option>)}</select></label>
-          <label>{t("Default permissions", "默认权限")}<select value={config.permissionMode} onChange={(event) => act(() => save({ permissionMode: event.target.value as PermissionMode }))}>{permissions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label>{t("Workspace for chats without a project", "无项目聊天的默认工作目录")}<button className="folder-choice" onClick={() => act(async () => { const path = await api.chooseFolder(); if (path) await save({ defaultWorkspace: path }); })}><span>{config.defaultWorkspace}</span><span>…</span></button><small>{t("Each new chat gets its own folder here. Existing chats keep their current folders.", "每个新聊天会在这里创建独立目录，已有聊天的目录保持不变。")}</small></label>
-          <label className="checkbox-label"><input type="checkbox" checked={config.sandbox} onChange={(event) => act(() => save({ sandbox: event.target.checked }))} />{t("Sandbox shell commands", "在沙箱中运行 Shell 命令")}</label>
+          <div className="settings-card">
+            <div className="setting-row"><div><strong>{t("Language", "语言")}</strong><small>{t("Choose the interface language.", "选择界面语言。")}</small></div><Select aria-label={t("Language", "语言")} value={language} onChange={(event) => act(async () => { await setLanguage(event.target.value as Language); await load(); })}><option value="zh-CN">简体中文</option><option value="en">English</option></Select></div>
+            <div className="setting-row"><div><strong>{t("Default model", "默认模型")}</strong><small>{t("Used when creating a new chat.", "新建聊天时使用。")}</small></div><Select aria-label={t("Default model", "默认模型")} value={modelValue(config.defaultModel)} onChange={(event) => act(() => save({ defaultModel: parseModel(event.target.value) }))}>{!models.some((model) => modelValue(model) === modelValue(config.defaultModel)) && <option value={modelValue(config.defaultModel)} disabled>{`${config.defaultModel.id} · ${t("Current default", "当前默认")}`}</option>}{models.map((model) => <option key={modelValue(model)} value={modelValue(model)}>{model.name}</option>)}</Select></div>
+            <div className="setting-row"><div><strong>{t("Default permissions", "默认权限")}</strong><small>{t("Initial permission mode for new chats.", "新建聊天时的初始权限模式。")}</small></div><Select aria-label={t("Default permissions", "默认权限")} value={config.permissionMode} onChange={(event) => act(() => save({ permissionMode: event.target.value as PermissionMode }))}>{permissions.map((value) => <option key={value} value={value}>{modeText(value, t, "long")}</option>)}</Select></div>
+            <div className="setting-row"><div><strong>{t("Workspace for chats without a project", "无项目聊天的默认工作目录")}</strong><small>{t("New projectless chats use a private folder here.", "无项目的新聊天会在此使用独立目录。")}</small></div><button className="folder-choice" onClick={() => act(async () => { const path = await api.chooseFolder(); if (path) await save({ defaultWorkspace: path }); })}><span>{config.defaultWorkspace}</span><Icon name="folder" /></button></div>
+            <label className="setting-row checkbox-row"><span><strong>{t("Sandbox shell commands", "在沙箱中运行 Shell 命令")}</strong><small>{t("Run commands with the configured filesystem and network restrictions.", "根据配置的文件系统和网络规则运行命令。")}</small></span><input type="checkbox" checked={config.sandbox} onChange={(event) => act(() => save({ sandbox: event.target.checked }))} /></label>
+          </div>
         </>}
         {section === "appearance" && <AppearanceSettings />}
         {section === "accounts" && <>

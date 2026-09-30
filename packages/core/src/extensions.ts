@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ToolListChangedNotificationSchema, type Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentTool, AgentToolResult } from "@voidkagami/agent";
-import type { HookConfig, McpServerConfig } from "@voidkagami/protocol";
+import { VERSION, type HookConfig, type McpServerConfig } from "@voidkagami/protocol";
 import type { TSchema } from "typebox";
 import { parse as parseYaml } from "yaml";
 import { runProcess } from "./runtime/process.ts";
@@ -168,7 +168,7 @@ export class McpManager {
 		}
 		await Promise.all(Object.entries(servers).map(async ([name, config]) => {
 			if (this.connections.has(name)) return;
-			const client = new Client({ name: "voidkagami", version: "0.1.0" });
+			const client = new Client({ name: "voidkagami", version: VERSION });
 			const transport = config.url
 				? new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } })
 				: config.command

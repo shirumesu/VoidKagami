@@ -15,6 +15,12 @@ export interface TranscriptItem {
   delivery?: "queued" | "consumed";
   attachments?: Attachment[];
   error?: boolean;
+  kind?: "turn" | "plan" | "notice";
+  plan?: { content: string; status: "pending" | "in_progress" | "completed" }[];
+  turnId?: string;
+  durationMs?: number;
+  turnStatus?: "completed" | "failed" | "interrupted";
+  hasTools?: boolean;
 }
 export interface SessionState {
   session: Session;
@@ -29,6 +35,9 @@ export interface SessionState {
   liveRevision: number;
   liveEpoch?: string;
   cost: number;
+  plan?: { content: string; status: "pending" | "in_progress" | "completed" }[];
+  planItemId?: string;
+  turnStartedAt?: string;
 }
 
 export function eventText(data: Record<string, unknown>): string {
@@ -195,19 +204,32 @@ export class SessionStore {
     const tools = new Map<string, TranscriptItem>();
     const pendingTools = new Set<TranscriptItem>();
     const transcript: TranscriptItem[] = [];
-    const finishTools = (status: "error" | "interrupted") => {
+    let activeTurnId: string | undefined;
+    let turnStartedAt: string | undefined;
+    let turnHasTools = false;
+    let turnFailure: "failed" | "interrupted" | undefined;
+    let latestPlan: TranscriptItem["plan"];
+    let planItemId: string | undefined;
+    const finishTools = (status: "completed" | "error" | "interrupted") => {
       for (const item of pendingTools) { item.toolStatus = status; item.error = status === "error"; }
       pendingTools.clear();
     };
     for (const event of path) {
-      const base = { id: event.id, seq: event.seq, text: eventText(event.data), event };
-      if (["user.message", "user.steer", "user.followUp"].includes(event.type)) {
+      const turnId = activeTurnId;
+      const base = { id: event.id, seq: event.seq, text: eventText(event.data), event, turnId };
+      if (event.type === "turn.started") {
+        activeTurnId = event.id;
+        turnStartedAt = event.timestamp;
+        turnHasTools = false;
+        turnFailure = undefined;
+      } else if (["user.message", "user.steer", "user.followUp"].includes(event.type)) {
         const inputKind = event.type === "user.steer" ? "steer" : event.type === "user.followUp" ? "followUp" : undefined;
         transcript.push({ ...base, role: "user", attachments: event.data.attachments as Attachment[] | undefined, inputKind, delivery: inputKind ? consumed.has(event.id) ? "consumed" : "queued" : undefined });
       } else if (event.type === "assistant.message") {
         const thinking = eventThinking(event.data);
         if (base.text || thinking) transcript.push({ ...base, role: "assistant", thinking: thinking || undefined });
       } else if (event.type === "tool.call") {
+        turnHasTools = true;
         const toolCallId = String(event.data.toolCallId || event.id);
         const toolArgs = (event.data.args || event.data.arguments || {}) as Record<string, unknown>;
         const item: TranscriptItem = { ...base, role: "tool", tool: String(event.data.tool || event.data.name || "Tool"), toolCallId, toolArgs, toolStatus: "running", text: JSON.stringify(toolArgs, null, 2) };
@@ -222,14 +244,41 @@ export class SessionStore {
         const text = base.text || JSON.stringify(event.data.result ?? event.data.output ?? "", null, 2);
         if (item) { item.text = text; item.error = error; item.toolStatus = error ? "error" : "completed"; pendingTools.delete(item); }
         else transcript.push({ ...base, role: "tool", tool: String(event.data.tool || event.data.name || "Result"), toolCallId, toolStatus: error ? "error" : "completed", text, error });
-      } else if (["run.error", "run.interrupted", "context.compacted", "subagent.spawned", "subagent.completed"].includes(event.type)) {
-        transcript.push({ ...base, role: "system", text: base.text || event.type.replaceAll(".", " "), error: event.type === "run.error" });
+      } else if (event.type === "todo.updated") {
+        latestPlan = Array.isArray(event.data.items) ? event.data.items as TranscriptItem["plan"] : [];
+        planItemId = event.id;
+        transcript.push({ ...base, role: "system", kind: "plan", plan: latestPlan, text: "" });
+      } else if (["run.error", "run.interrupted"].includes(event.type)) {
+        turnFailure = event.type === "run.error" ? "failed" : "interrupted";
+        finishTools(turnFailure === "failed" ? "error" : "interrupted");
+        transcript.push({ ...base, role: "system", kind: "notice", text: base.text || event.type.replaceAll(".", " "), error: event.type === "run.error" });
+        const following = path.slice(path.indexOf(event) + 1).find((candidate) => candidate.type === "turn.started" || candidate.type === "turn.ended");
+        const pairedEnd = following?.type === "turn.ended";
+        if (!pairedEnd) {
+          const end = Date.parse(event.timestamp);
+          const start = Date.parse(turnStartedAt || event.timestamp);
+          transcript.push({ ...base, role: "system", kind: "turn", turnStatus: turnFailure, durationMs: Math.max(0, end - start), hasTools: turnHasTools });
+          activeTurnId = undefined; turnStartedAt = undefined;
+        }
+      } else if (["context.compacted", "subagent.spawned", "subagent.completed"].includes(event.type)) {
+        transcript.push({ ...base, role: "system", kind: "notice", text: base.text || event.type.replaceAll(".", " ") });
       }
-      if (event.type === "turn.ended" || event.type === "run.error" || event.type === "run.interrupted") finishTools(event.type === "run.error" || event.data.status === "failed" ? "error" : "interrupted");
+      if (event.type === "turn.ended") {
+        const end = Date.parse(event.timestamp);
+        const start = Date.parse(turnStartedAt || event.timestamp);
+        const rawStatus = event.data.status;
+        const turnStatus = turnFailure || (rawStatus === "failed" || rawStatus === "interrupted" ? rawStatus : "completed");
+        finishTools(turnStatus === "failed" ? "error" : turnStatus === "interrupted" ? "interrupted" : "completed");
+        transcript.push({ ...base, role: "system", kind: "turn", turnStatus, durationMs: Math.max(0, end - start), hasTools: turnHasTools });
+        activeTurnId = undefined; turnStartedAt = undefined; turnFailure = undefined; turnHasTools = false;
+      }
     }
     if (state.session.status !== "running" && state.session.status !== "waiting_approval") finishTools(state.session.status === "failed" ? "error" : "interrupted");
     state.transcript = transcript;
     state.transcriptRevision++;
+    state.plan = latestPlan;
+    state.planItemId = planItemId;
+    state.turnStartedAt = state.session.status === "running" || state.session.status === "waiting_approval" ? turnStartedAt : undefined;
     const lastTurn = path.findLast((event) => event.type === "turn.ended");
     state.cost = Number(lastTurn?.data.cost || 0);
   }

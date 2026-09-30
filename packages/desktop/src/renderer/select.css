@@ -1,0 +1,4 @@
+.select-control { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.select-control select { width: 100%; min-width: 0; appearance: none; background-image: none; padding-right: 30px; }
+.select-control > .ui-icon { position: absolute; right: 9px; width: 13px; height: 13px; color: var(--text-tertiary); pointer-events: none; }
+.select-control:has(select:disabled) { opacity: .5; }

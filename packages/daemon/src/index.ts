@@ -60,8 +60,8 @@ async function handle(socket: Socket, request: RpcRequest): Promise<void> {
       const supplied = Buffer.from(params?.token || "");
       const expected = Buffer.from(token);
       if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) throw Object.assign(new Error("Invalid daemon token"), { code: -32001 });
-      client.authenticated = true;
       if (params.protocolVersion !== PROTOCOL_VERSION) throw Object.assign(new Error(`Protocol version mismatch; server requires ${PROTOCOL_VERSION}`), { code: -32002 });
+      client.authenticated = true;
       result = { protocolVersion: PROTOCOL_VERSION, serverVersion: VERSION, pid: process.pid };
     } else {
       if (!client.authenticated) throw Object.assign(new Error("Handshake required"), { code: -32001 });

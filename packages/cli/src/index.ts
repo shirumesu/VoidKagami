@@ -2,75 +2,16 @@
 import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { SocketClient, SessionStore, eventText } from "@voidkagami/client";
+import { SocketClient, SessionStore, eventText, describeTool, statusText, statusTone } from "@voidkagami/client";
 import { VERSION } from "@voidkagami/protocol";
 import type { Attachment, Config, ModelSelection, PermissionMode, Session, SessionEvent, LiveEvent } from "@voidkagami/protocol";
 import { login } from "./login.ts";
 import { t, loadLanguage, statusLabel } from "./i18n.ts";
+import { helpText } from "./help.ts";
+import { tone } from "./theme.ts";
+import { truncateToWidth, visibleWidth } from "@voidkagami/tui";
 
-const help = () => t(`VoidKagami ${VERSION}
-
-Usage: voidkagami [chat] [prompt] [options]
-       voidkagami run <prompt> [--json] [--mode auto]
-       voidkagami attach <session-id>
-       voidkagami abort <session-id>
-       voidkagami sessions [search] [--json]
-       voidkagami models [--json]
-       voidkagami login [openai|provider] [--key-stdin]
-       voidkagami logout <provider>
-       voidkagami config [key [json-value]]
-       voidkagami status | stop
-
-Options:
-  --cwd <path>          Project directory (default: current directory)
-  --session <id>        Continue an existing session
-  -c, --continue        Continue the latest session in this directory
-  -r, --resume          Pick a saved session (or use --session <id>)
-  -p, --print           Run a prompt without the interactive interface
-  --model <provider/id> Model for a new session
-  --mode <mode>         ask, accept_edits, auto, plan
-  --worktree            Create an isolated Git worktree
-  --branch <branch>     Git branch for the new worktree
-  --image <path>        Attach an image (repeatable)
-  --file <path>         Attach a file (repeatable)
-  --json                Emit JSON; run streams JSONL events
-  --help | --version
-
-Interactive: /help for commands, Esc to stop, Shift+Enter for a new line.
-/language switches English/Simplified Chinese; /clear is an alias for /new.
-abort stops one session; stop shuts down the entire shared daemon.
-Closing a client leaves running tasks in the shared daemon.`, `VoidKagami ${VERSION}
-
-用法：voidkagami [chat] [提示词] [选项]
-      voidkagami run <提示词> [--json] [--mode auto]
-      voidkagami attach <会话 ID>
-      voidkagami abort <会话 ID>
-      voidkagami sessions [搜索词] [--json]
-      voidkagami models [--json]
-      voidkagami login [openai|服务商] [--key-stdin]
-      voidkagami logout <服务商>
-      voidkagami config [配置项 [JSON 值]]
-      voidkagami status | stop
-
-选项：
-  --cwd <路径>         项目目录（默认当前目录）
-  --session <id>       继续现有会话
-  -c, --continue       继续此目录的最近会话
-  -r, --resume         选择已保存的会话
-  -p, --print          以非交互模式执行提示词
-  --model <服务商/id>  新会话使用的模型
-  --mode <模式>        ask、accept_edits、auto、plan
-  --worktree           创建隔离的 Git 工作树
-  --branch <分支>      新工作树的分支
-  --image <路径>       添加图片（可重复）
-  --file <路径>        添加文件（可重复）
-  --json               输出 JSON；执行过程输出 JSONL 事件
-  --help | --version
-
-交互模式：/help 查看命令，Esc 停止，Shift+Enter 换行。
-/language 切换简体中文或英文；/clear 是 /new 的别名。
-abort 停止一个会话；stop 关闭共享 daemon。
-关闭客户端后，后台任务继续执行。`);
+const help = () => helpText(process.stdout.isTTY, process.stdout.columns || 0);
 
 export function parseModel(value: string): ModelSelection {
   const slash = value.indexOf("/");
@@ -83,6 +24,7 @@ async function readStdin() {
   for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   return Buffer.concat(chunks).toString("utf8");
 }
+function pad(value: string, width: number) { const clipped = truncateToWidth(value, width); return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`; }
 
 async function main() {
   loadLanguage();
@@ -106,11 +48,27 @@ async function main() {
     }
     if (command === "sessions") {
       const sessions = await client.request("session.list", { query: positionals.join(" ") || undefined });
-      output(values.json ? sessions : sessions.map((s) => `${s.id}  ${statusLabel(s.status)} ${s.title}\n  ${s.cwd}`).join("\n")); return;
+      if (values.json) output(sessions);
+      else {
+        const statusWidth = Math.max(8, ...sessions.map((session) => visibleWidth(statusText(session.status, t))));
+        const rows = [`${pad(t("ID", "会话 ID"), 10)}  ${pad(t("Status", "状态"), statusWidth)}  ${pad(t("Title", "标题"), 30)}  ${t("Workspace", "工作区")}`];
+        for (const session of sessions) {
+          const label = statusText(session.status, t);
+          rows.push(`${pad(session.id.slice(0, 10), 10)}  ${pad(process.stdout.isTTY ? tone(label, statusTone(session.status)) : label, statusWidth)}  ${pad(session.title, 30)}  ${session.cwd}`);
+        }
+        console.log(rows.join("\n"));
+      }
+      return;
     }
     if (command === "models") {
       const models = (await client.request("model.list", {})).filter((model) => model.authenticated);
-      output(values.json ? models : models.map((m) => `${m.authenticated ? "●" : "○"} ${m.provider}/${m.id}  ${m.name}  ${Math.round(m.contextWindow / 1000)}k`).join("\n")); return;
+      if (values.json) output(models);
+      else {
+        const rows = [`  ${pad(t("Model", "模型"), 30)}  ${pad(t("Name", "名称"), 24)}  ${t("Context", "上下文")}`];
+        for (const model of models) rows.push(`${process.stdout.isTTY ? tone("●", "success") : "●"} ${pad(`${model.provider}/${model.id}`, 30)}  ${pad(model.name, 24)}  ${Math.round(model.contextWindow / 1000)}k`);
+        console.log(rows.join("\n"));
+      }
+      return;
     }
     if (command === "login") {
       const provider = positionals[0] || "openai";
@@ -171,7 +129,8 @@ async function run(client: SocketClient, session: Session, prompt: string, attac
     }
     const controller = new AbortController();
     approvalInput = { id: approval.id, controller };
-    const question = approval.question ? `${approval.question}${approval.options?.length ? `\n${approval.options.join(" / ")}` : ""}\n${t("Answer", "回答")}: ` : `${approval.tool}: ${JSON.stringify(approval.args)}\n${t("Allow? [y/N]", "允许？[y/N]")} `;
+    const body = approval.question ? approval.question : approval.tool === "bash" ? `$ ${String(approval.args.command || "")}` : String(approval.args.path || Object.values(approval.args).find((value) => typeof value === "string") || approval.tool);
+    const question = approval.question ? `${approval.question}${approval.options?.length ? `\n${approval.options.join(" / ")}` : ""}\n${t("Answer", "回答")}: ` : `${t(`Allow ${approval.tool}?`, `允许 ${approval.tool}？`)}\n${body}\n${t("Allow? [y/N]", "允许？[y/N]")} `;
     void input.question(question, { signal: controller.signal }).then(async (answer) => {
       if (!finished && store.get(session.id)?.approvals.some((item) => item.id === approval.id)) await client.request("approval.respond", { approvalId: approval.id, allow: approval.question ? true : answer.toLowerCase() === "y", answer: approval.question ? answer : undefined });
     }).catch((error) => { if (!controller.signal.aborted) { finished = true; rejectDone(error); } }).finally(() => {
@@ -184,6 +143,9 @@ async function run(client: SocketClient, session: Session, prompt: string, attac
     if (json) console.log(JSON.stringify(event));
     else if (event.type === "assistant.delta" && !event.data.thinking) {
       const delta = String(event.data.delta || ""); streamed += delta; process.stdout.write(delta);
+    } else if (event.type === "tool.progress" && event.data.text) {
+      const progress = `  └ ${String(event.data.text).split("\n").slice(-1)[0]}`;
+      process.stderr.write(`${process.stderr.isTTY ? tone(progress, "muted") : progress}\n`);
     }
   };
   const onEvent = (event: SessionEvent) => {
@@ -195,7 +157,16 @@ async function run(client: SocketClient, session: Session, prompt: string, attac
       const text = eventText(event.data);
       if (text.trim()) process.stdout.write(`${text.startsWith(streamed) ? text.slice(streamed.length) : text}\n`);
       streamed = "";
-    } else if (event.type === "tool.call") process.stderr.write(`→ ${event.data.tool}\n`);
+    } else if (event.type === "tool.result") {
+      const item = store.get(session.id)?.transcript.find((entry) => entry.toolCallId === event.data.toolCallId);
+      if (item && !json) {
+        const description = describeTool(item, t, store.get(session.id)!.session.cwd);
+        const symbol = item.error ? "✗" : "✓";
+        const stats = `${description.added ? ` +${description.added}` : ""}${description.removed ? ` −${description.removed}` : ""}`;
+        const line = `${symbol} ${description.verb}${description.target ? ` ${description.target}` : ""}${stats}`;
+        process.stderr.write(`${process.stderr.isTTY ? tone(line, item.error ? "danger" : "success") : line}\n`);
+      }
+    }
     if (event.type === "approval.requested" && !json) {
       if (process.stdin.isTTY) promptNextApproval();
       else process.stderr.write(t(`Approval required. Open voidkagami attach ${session.id} to respond.\n`, `需要审批，请打开 voidkagami attach ${session.id} 处理。\n`));

@@ -1,53 +1,59 @@
 import React, { useEffect, useLayoutEffect, useState } from "react";
 import { useI18n } from "./i18n.ts";
+import { Select } from "./select.tsx";
+import { Icon } from "./icons.tsx";
 
-type Theme = "light" | "dark";
+type ThemePreference = "system" | "light" | "dark";
 interface Appearance {
-  theme: Theme;
-  background: string;
-  foreground: string;
+  theme: ThemePreference;
   fontFamily: string;
   codeFontFamily: string;
   fontSize: number;
   codeFontSize: number;
+  customColors: boolean;
+  background: string;
+  foreground: string;
   contrast: number;
 }
-interface AppearancePreference { presetId: string; values: Appearance; }
 
-const themeColors = {
-  light: { background: "#FFFFFF", foreground: "#0D0D0D" },
-  dark: { background: "#171717", foreground: "#E7E7E7" },
-};
-const presets: { id: string; name: string; values: Appearance }[] = [{
-  id: "normal", name: "常规", values: {
-    theme: "light", ...themeColors.light, fontFamily: "system", codeFontFamily: "system", fontSize: 14, codeFontSize: 12, contrast: 45,
-  },
-}];
-const systemFont = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-const systemCodeFont = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace';
 const storageKey = "appearance";
-const bounded = (value: unknown, fallback: number, min: number, max: number) => typeof value === "number" && Number.isFinite(value) ? Math.max(min, Math.min(max, Math.round(value))) : fallback;
+const systemFont = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Segoe UI", "Microsoft YaHei", sans-serif';
+const systemCodeFont = '"SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace';
+const palettes = {
+  light: { background: "#FFFFFF", foreground: "#0D0D0D" },
+  dark: { background: "#1A1A1B", foreground: "#ECECEC" },
+};
+const defaults: Appearance = { theme: "system", fontFamily: "system", codeFontFamily: "system", fontSize: 14, codeFontSize: 12.5, customColors: false, background: palettes.light.background, foreground: palettes.light.foreground, contrast: 45 };
+const bounded = (value: unknown, fallback: number, min: number, max: number) => typeof value === "number" && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
 const hexColor = (value: unknown, fallback: string) => typeof value === "string" && /^#[\da-f]{6}$/i.test(value) ? value.toUpperCase() : fallback;
+let currentAppearance: Appearance = { ...defaults };
+let systemTheme: MediaQueryList | undefined;
 
-function normalize(values: Partial<Appearance>, defaults: Appearance): Appearance {
+function normalize(value: Partial<Appearance>, fallback: Appearance): Appearance {
+  const palette = value.theme === "dark" ? palettes.dark : palettes.light;
+  const background = hexColor(value.background, palette.background);
+  const foreground = hexColor(value.foreground, palette.foreground);
   return {
-    theme: values.theme === "dark" ? "dark" : "light",
-    background: hexColor(values.background, defaults.background),
-    foreground: hexColor(values.foreground, defaults.foreground),
-    fontFamily: typeof values.fontFamily === "string" && values.fontFamily.trim() ? values.fontFamily.trim() : defaults.fontFamily,
-    codeFontFamily: typeof values.codeFontFamily === "string" && values.codeFontFamily.trim() ? values.codeFontFamily.trim() : defaults.codeFontFamily,
-    fontSize: bounded(values.fontSize, defaults.fontSize, 10, 24),
-    codeFontSize: bounded(values.codeFontSize, defaults.codeFontSize, 9, 24),
-    contrast: bounded(values.contrast, defaults.contrast, 0, 100),
+    theme: value.theme === "light" || value.theme === "dark" || value.theme === "system" ? value.theme : fallback.theme,
+    fontFamily: typeof value.fontFamily === "string" && value.fontFamily.trim() ? value.fontFamily.trim() : fallback.fontFamily,
+    codeFontFamily: typeof value.codeFontFamily === "string" && value.codeFontFamily.trim() ? value.codeFontFamily.trim() : fallback.codeFontFamily,
+    fontSize: bounded(value.fontSize, fallback.fontSize, 10, 24),
+    codeFontSize: bounded(value.codeFontSize, fallback.codeFontSize, 9, 24),
+    customColors: typeof value.customColors === "boolean" ? value.customColors : background !== palette.background || foreground !== palette.foreground || (value.contrast !== undefined && value.contrast !== fallback.contrast),
+    background,
+    foreground,
+    contrast: bounded(value.contrast, fallback.contrast, 0, 100),
   };
 }
 
-function loadAppearance(): AppearancePreference {
+function loadAppearance(): Appearance {
   try {
-    const saved = JSON.parse(localStorage.getItem(storageKey) || "null") as Partial<AppearancePreference> | null;
-    const preset = presets.find((item) => item.id === saved?.presetId) || presets[0]!;
-    return { presetId: preset.id, values: normalize(saved?.values || {}, preset.values) };
-  } catch { return { presetId: presets[0]!.id, values: { ...presets[0]!.values } }; }
+    const saved = JSON.parse(localStorage.getItem(storageKey) || "null") as { presetId?: string; values?: Partial<Appearance> } | Partial<Appearance> | null;
+    if (!saved) return { ...defaults };
+    const legacy = "values" in saved && saved.values ? saved.values : saved as Partial<Appearance>;
+    const legacyTheme = legacy.theme === "dark" ? "dark" : legacy.theme === "light" && !("presetId" in saved && saved.presetId === "normal") ? "light" : "system";
+    return normalize({ ...legacy, theme: legacyTheme }, defaults);
+  } catch { return { ...defaults }; }
 }
 
 function mix(background: string, foreground: string, amount: number): string {
@@ -55,45 +61,52 @@ function mix(background: string, foreground: string, amount: number): string {
 }
 
 function applyAppearance(value: Appearance) {
+  currentAppearance = value;
+  const resolved = value.theme === "system" ? systemTheme?.matches ? "dark" : "light" : value.theme;
   const root = document.documentElement;
-  const { background, foreground } = value;
-  const contrast = value.contrast / 100;
-  const surface = (amount: number) => mix(background, foreground, amount);
-  const dark = [1, 3, 5].reduce((total, offset, index) => total + parseInt(background.slice(offset, offset + 2), 16) * [0.2126, 0.7152, 0.0722][index]!, 0) < 128;
-  const success = dark ? "#A6C9AE" : "#246B37";
-  const danger = dark ? "#F0ADAD" : "#A32323";
-  const warning = dark ? "#D6BB8B" : "#80520A";
-  const variables: Record<string, string> = {
-    "background": background, "foreground": foreground,
-    "font-family": value.fontFamily === "system" ? systemFont : value.fontFamily,
-    "code-font-family": value.codeFontFamily === "system" ? systemCodeFont : value.codeFontFamily,
-    "ui-font-size": `${value.fontSize}px`, "code-font-size": `${value.codeFontSize}px`,
-    "surface": surface(0.02 + contrast * 0.04), "surface-raised": surface(0.035 + contrast * 0.065),
-    "surface-hover": surface(0.055 + contrast * 0.10), "surface-selected": surface(0.075 + contrast * 0.15),
-    "border": surface(0.10 + contrast * 0.20), "border-strong": surface(0.22 + contrast * 0.25),
-    "text-secondary": surface(0.65 + contrast * 0.22), "text-muted": surface(0.58 + contrast * 0.25),
-    "text-faint": surface(0.48 + contrast * 0.25), "focus": surface(0.60 + contrast * 0.20),
-    "primary": foreground, "primary-text": background, "primary-hover": mix(foreground, background, 0.10),
-    "success": success, "danger": danger, "warning": warning,
-    "success-surface": mix(background, success, 0.08 + contrast * 0.08),
-    "danger-surface": mix(background, danger, 0.08 + contrast * 0.08),
-    "warning-surface": mix(background, warning, 0.08 + contrast * 0.08),
-    "danger-border": mix(background, danger, 0.35 + contrast * 0.15),
-    "warning-border": mix(background, warning, 0.35 + contrast * 0.15),
-    "shadow": dark ? "#00000066" : "#0000001F", "backdrop": dark ? "#00000088" : "#00000040",
-  };
-  for (const [name, color] of Object.entries(variables)) root.style.setProperty(`--${name}`, color);
-  root.style.colorScheme = value.theme;
-  root.dataset.theme = value.theme;
-  void window.voidkagami.setAppearance({ theme: value.theme, background });
+  const palette = palettes[resolved];
+  root.dataset.theme = resolved;
+  root.style.colorScheme = resolved;
+  root.style.setProperty("--font-ui", value.fontFamily === "system" ? systemFont : value.fontFamily);
+  root.style.setProperty("--font-code", value.codeFontFamily === "system" ? systemCodeFont : value.codeFontFamily);
+  root.style.setProperty("--ui-font-size", `${value.fontSize}px`);
+  root.style.setProperty("--code-font-size", `${value.codeFontSize}px`);
+  const overrides = ["--bg", "--bg-sidebar", "--bg-elevated", "--bg-subtle", "--bg-hover", "--bg-active", "--text", "--text-secondary", "--text-tertiary", "--border", "--border-strong", "--primary", "--primary-text"];
+  if (value.customColors) {
+    const { background, foreground } = value;
+    const contrast = value.contrast / 100;
+    const surface = (amount: number) => mix(background, foreground, amount);
+    root.style.setProperty("--bg", background);
+    root.style.setProperty("--bg-sidebar", surface(0.02 + contrast * 0.04));
+    root.style.setProperty("--bg-elevated", surface(0.035 + contrast * 0.065));
+    root.style.setProperty("--bg-subtle", surface(0.055 + contrast * 0.10));
+    root.style.setProperty("--bg-hover", surface(0.055 + contrast * 0.10));
+    root.style.setProperty("--bg-active", surface(0.075 + contrast * 0.15));
+    root.style.setProperty("--text", foreground);
+    root.style.setProperty("--text-secondary", surface(0.65 + contrast * 0.22));
+    root.style.setProperty("--text-tertiary", surface(0.48 + contrast * 0.25));
+    root.style.setProperty("--border", surface(0.10 + contrast * 0.20));
+    root.style.setProperty("--border-strong", surface(0.22 + contrast * 0.25));
+    root.style.setProperty("--primary", foreground);
+    root.style.setProperty("--primary-text", background);
+  } else {
+    for (const name of overrides) root.style.removeProperty(name);
+    root.style.setProperty("--bg", palette.background);
+    root.style.setProperty("--text", palette.foreground);
+  }
+  void window.voidkagami.setAppearance({ theme: value.theme, background: value.customColors ? value.background : palette.background });
 }
 
-export function initializeAppearance() { applyAppearance(loadAppearance().values); }
+export function initializeAppearance() {
+  systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+  systemTheme.addEventListener("change", () => { if (currentAppearance.theme === "system") applyAppearance(currentAppearance); });
+  applyAppearance(loadAppearance());
+}
 
 function NumberControl({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);
-  return <label>{label}<input type="number" min={min} max={max} value={text} onChange={(event) => { setText(event.target.value); const next = event.target.valueAsNumber; if (Number.isFinite(next) && next >= min && next <= max) onChange(next); }} onBlur={() => { const next = text.trim() ? bounded(Number(text), value, min, max) : value; setText(String(next)); onChange(next); }} /></label>;
+  return <div className="number-control"><input aria-label={label} type="number" step="0.5" min={min} max={max} value={text} onChange={(event) => { setText(event.target.value); const next = event.target.valueAsNumber; if (Number.isFinite(next) && next >= min && next <= max) onChange(next); }} onBlur={() => { const next = text.trim() ? bounded(Number(text), value, min, max) : value; setText(String(next)); onChange(next); }} /><span>px</span></div>;
 }
 
 function ColorControl({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
@@ -109,36 +122,29 @@ function FontControl({ label, value, code = false, onChange }: { label: string; 
   useEffect(() => setCustomText(value), [value]);
   const choices = [{ value: "system", label: code ? t("System monospace", "系统等宽字体") : t("System font", "系统字体") }, { value: "sans-serif", label: t("Sans serif", "无衬线字体") }, { value: "serif", label: t("Serif", "衬线字体") }, { value: "monospace", label: t("Monospace", "等宽字体") }];
   const custom = !choices.some((choice) => choice.value === value);
-  return <label>{label}<select value={custom ? "custom" : value} onChange={(event) => onChange(event.target.value === "custom" ? code ? '"Courier New", monospace' : 'Arial, sans-serif' : event.target.value)}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}<option value="custom">{t("Custom font family", "自定义字体")}</option></select>{custom && <input aria-label={`${t("Custom", "自定义")} ${label}`} value={customText} spellCheck={false} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) onChange(customText.trim()); else setCustomText(value); }} placeholder={code ? "Menlo, monospace" : "Arial, sans-serif"} />}</label>;
+  return <div className="font-control"><Select aria-label={label} value={custom ? "custom" : value} onChange={(event) => onChange(event.target.value === "custom" ? code ? '"Courier New", monospace' : "Arial, sans-serif" : event.target.value)}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}<option value="custom">{t("Custom font family", "自定义字体")}</option></Select>{custom && <input aria-label={`${t("Custom", "自定义")} ${label}`} value={customText} spellCheck={false} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) onChange(customText.trim()); else setCustomText(value); }} placeholder={code ? "Menlo, Consolas, monospace" : "Segoe UI, sans-serif"} />}</div>;
 }
 
 export function AppearanceSettings() {
   const { t } = useI18n();
-  const [preference, setPreference] = useState(loadAppearance);
+  const [value, setValue] = useState(loadAppearance);
   const [saveError, setSaveError] = useState("");
-  const preset = presets.find((item) => item.id === preference.presetId) || presets[0]!;
-  const value = preference.values;
   useLayoutEffect(() => {
     applyAppearance(value);
-    try { localStorage.setItem(storageKey, JSON.stringify(preference)); setSaveError(""); }
+    try { localStorage.setItem(storageKey, JSON.stringify(value)); setSaveError(""); }
     catch { setSaveError(t("Appearance could not be saved on this device.", "无法在当前设备保存外观设置。")); }
-  }, [preference]);
-  const update = (patch: Partial<Appearance>) => setPreference((current) => ({ ...current, values: normalize({ ...current.values, ...patch }, preset.values) }));
+  }, [value]);
+  const update = (patch: Partial<Appearance>) => setValue((current) => ({ ...current, ...patch }));
   return <section className="appearance-settings">
-    <h3>{t("Appearance", "外观")}</h3>
-    <div className="appearance-preset"><label>{t("Preset", "预设")}<select value={preset.id} onChange={(event) => { const selected = presets.find((item) => item.id === event.target.value)!; setPreference({ presetId: selected.id, values: { ...selected.values } }); }}>{presets.map((item) => <option key={item.id} value={item.id}>{t("Regular", item.name)}</option>)}</select></label><button type="button" onClick={() => setPreference({ presetId: preset.id, values: { ...preset.values } })}>{t("Reset to preset defaults", "重置为预设默认值")}</button></div>
-    <div className="appearance-grid">
-      <label>{t("Theme", "主题")}<select value={value.theme} onChange={(event) => { const theme = event.target.value as Theme; update({ theme, ...themeColors[theme] }); }}><option value="light">{t("Light", "浅色")}</option><option value="dark">{t("Dark", "深色")}</option></select></label>
-      <div />
-      <FontControl label={t("Interface font", "界面字体")} value={value.fontFamily} onChange={(fontFamily) => update({ fontFamily })} />
-      <FontControl label={t("Code font", "代码字体")} value={value.codeFontFamily} code onChange={(codeFontFamily) => update({ codeFontFamily })} />
-      <NumberControl label={t("Interface size (px)", "界面字号（px）")} value={value.fontSize} min={10} max={24} onChange={(fontSize) => update({ fontSize })} />
-      <NumberControl label={t("Code size (px)", "代码字号（px）")} value={value.codeFontSize} min={9} max={24} onChange={(codeFontSize) => update({ codeFontSize })} />
-      <ColorControl label={t("Background", "背景")} value={value.background} onChange={(background) => update({ background })} />
-      <ColorControl label={t("Foreground", "前景")} value={value.foreground} onChange={(foreground) => update({ foreground })} />
+    <div className="settings-card appearance-card">
+      <div className="setting-row"><div><strong>{t("Theme", "主题")}</strong><small>{t("Follow the system or choose a fixed appearance.", "跟随系统或固定外观。")}</small></div><div className="segmented" role="group" aria-label={t("Theme", "主题")}>{(["system", "light", "dark"] as const).map((theme) => <button type="button" className={value.theme === theme ? "selected" : ""} key={theme} onClick={() => update({ theme })}>{theme === "system" ? t("System", "跟随系统") : theme === "light" ? t("Light", "浅色") : t("Dark", "深色")}</button>)}</div></div>
+      <div className="setting-row"><div><strong>{t("Interface font", "界面字体")}</strong><small>{t("Font used for the application interface.", "应用界面使用的字体。")}</small></div><FontControl label={t("Font family", "字体系列")} value={value.fontFamily} onChange={(fontFamily) => update({ fontFamily })} /></div>
+      <div className="setting-row"><div><strong>{t("Code font", "代码字体")}</strong><small>{t("Font used for code and tool output.", "代码和工具输出使用的字体。")}</small></div><FontControl label={t("Code font family", "代码字体系列")} value={value.codeFontFamily} code onChange={(codeFontFamily) => update({ codeFontFamily })} /></div>
+      <div className="setting-row"><div><strong>{t("Interface size", "界面字号")}</strong></div><NumberControl label={t("UI size (px)", "界面字号（px）")} value={value.fontSize} min={10} max={24} onChange={(fontSize) => update({ fontSize })} /></div>
+      <div className="setting-row"><div><strong>{t("Code size", "代码字号")}</strong></div><NumberControl label={t("Code size (px)", "代码字号（px）")} value={value.codeFontSize} min={9} max={24} onChange={(codeFontSize) => update({ codeFontSize })} /></div>
     </div>
-    <label>{t("Contrast", "对比度")} <span className="appearance-contrast"><input aria-label={t("Appearance contrast", "外观对比度")} type="range" min={0} max={100} value={value.contrast} onChange={(event) => update({ contrast: Number(event.target.value) })} /><output>{value.contrast}</output></span></label>
-    <p className="muted appearance-note">{t("Changes are saved automatically. Contrast adjusts surfaces, borders, and secondary text.", "调整会自动保留。对比度用于调整背景层次、边框和次要文字。")}</p>
+    <details className="settings-card custom-colors"><summary><Icon name="chevron" className="disclosure-chevron" />{t("Custom colors", "自定义颜色")}</summary><div className="custom-colors-content"><label className="checkbox-label"><input type="checkbox" checked={value.customColors} onChange={(event) => { const resolved = value.theme === "system" ? systemTheme?.matches ? "dark" : "light" : value.theme; update({ customColors: event.target.checked, ...(event.target.checked ? palettes[resolved] : {}) }); }} />{t("Override theme colors", "覆盖主题颜色")}</label>{value.customColors && <><ColorControl label={t("Background", "背景")} value={value.background} onChange={(background) => update({ background })} /><ColorControl label={t("Foreground", "前景")} value={value.foreground} onChange={(foreground) => update({ foreground })} /><label>{t("Contrast", "对比度")}<span className="appearance-contrast"><input aria-label={t("Appearance contrast", "外观对比度")} type="range" min={0} max={100} value={value.contrast} onChange={(event) => update({ contrast: Number(event.target.value) })} /><output>{value.contrast}</output></span></label></>}</div></details>
+    <p className="muted appearance-note">{t("Changes are saved automatically. Reduced motion is respected.", "更改会自动保存，并遵循减少动态效果设置。")}</p>
     {saveError && <p className="error-text" role="alert">{saveError}</p>}
   </section>;
 }

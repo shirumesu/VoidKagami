@@ -10,6 +10,8 @@
     "dev": "node packages/cli/src/index.ts",
     "daemon": "node packages/daemon/src/index.ts",
     "desktop": "pnpm --filter @voidkagami/desktop dev",
+    "preview:cli": "node packages/cli/scripts/preview.ts",
+    "preview:desktop": "node packages/desktop/scripts/preview.ts",
     "check": "tsc --noEmit",
     "build": "node scripts/build.ts",
     "build:desktop": "pnpm --filter @voidkagami/desktop build"
