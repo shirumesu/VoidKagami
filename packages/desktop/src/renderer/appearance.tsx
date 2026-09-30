@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useState } from "react";
+import { useI18n } from "./i18n.ts";
 
 type Theme = "light" | "dark";
 interface Appearance {
@@ -96,20 +97,23 @@ function NumberControl({ label, value, min, max, onChange }: { label: string; va
 }
 
 function ColorControl({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const { t } = useI18n();
   const [text, setText] = useState(value);
   useEffect(() => setText(value), [value]);
-  return <label>{label}<span className="appearance-color"><input type="color" aria-label={`${label} color`} value={value} onChange={(event) => onChange(event.target.value)} /><input aria-label={`${label} hex`} value={text} maxLength={7} spellCheck={false} onChange={(event) => { setText(event.target.value); if (/^#[\da-f]{6}$/i.test(event.target.value)) onChange(event.target.value); }} onBlur={() => setText(value)} /></span></label>;
+  return <label>{label}<span className="appearance-color"><input type="color" aria-label={`${label} ${t("color", "颜色")}`} value={value} onChange={(event) => onChange(event.target.value)} /><input aria-label={`${label} ${t("hex", "色值")}`} value={text} maxLength={7} spellCheck={false} onChange={(event) => { setText(event.target.value); if (/^#[\da-f]{6}$/i.test(event.target.value)) onChange(event.target.value); }} onBlur={() => setText(value)} /></span></label>;
 }
 
 function FontControl({ label, value, code = false, onChange }: { label: string; value: string; code?: boolean; onChange: (value: string) => void }) {
+  const { t } = useI18n();
   const [customText, setCustomText] = useState(value);
   useEffect(() => setCustomText(value), [value]);
-  const choices = [{ value: "system", label: code ? "System monospace" : "System font" }, { value: "sans-serif", label: "Sans serif" }, { value: "serif", label: "Serif" }, { value: "monospace", label: "Monospace" }];
+  const choices = [{ value: "system", label: code ? t("System monospace", "系统等宽字体") : t("System font", "系统字体") }, { value: "sans-serif", label: t("Sans serif", "无衬线字体") }, { value: "serif", label: t("Serif", "衬线字体") }, { value: "monospace", label: t("Monospace", "等宽字体") }];
   const custom = !choices.some((choice) => choice.value === value);
-  return <label>{label}<select value={custom ? "custom" : value} onChange={(event) => onChange(event.target.value === "custom" ? code ? '"Courier New", monospace' : 'Arial, sans-serif' : event.target.value)}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}<option value="custom">Custom font family</option></select>{custom && <input aria-label={`Custom ${label.toLowerCase()}`} value={customText} spellCheck={false} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) onChange(customText.trim()); else setCustomText(value); }} placeholder={code ? "Menlo, monospace" : "Arial, sans-serif"} />}</label>;
+  return <label>{label}<select value={custom ? "custom" : value} onChange={(event) => onChange(event.target.value === "custom" ? code ? '"Courier New", monospace' : 'Arial, sans-serif' : event.target.value)}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}<option value="custom">{t("Custom font family", "自定义字体")}</option></select>{custom && <input aria-label={`${t("Custom", "自定义")} ${label}`} value={customText} spellCheck={false} onChange={(event) => setCustomText(event.target.value)} onBlur={() => { if (customText.trim()) onChange(customText.trim()); else setCustomText(value); }} placeholder={code ? "Menlo, monospace" : "Arial, sans-serif"} />}</label>;
 }
 
 export function AppearanceSettings() {
+  const { t } = useI18n();
   const [preference, setPreference] = useState(loadAppearance);
   const [saveError, setSaveError] = useState("");
   const preset = presets.find((item) => item.id === preference.presetId) || presets[0]!;
@@ -117,24 +121,24 @@ export function AppearanceSettings() {
   useLayoutEffect(() => {
     applyAppearance(value);
     try { localStorage.setItem(storageKey, JSON.stringify(preference)); setSaveError(""); }
-    catch { setSaveError("Appearance could not be saved on this device."); }
+    catch { setSaveError(t("Appearance could not be saved on this device.", "无法在当前设备保存外观设置。")); }
   }, [preference]);
   const update = (patch: Partial<Appearance>) => setPreference((current) => ({ ...current, values: normalize({ ...current.values, ...patch }, preset.values) }));
   return <section className="appearance-settings">
-    <h3>Appearance</h3>
-    <div className="appearance-preset"><label>Preset<select value={preset.id} onChange={(event) => { const selected = presets.find((item) => item.id === event.target.value)!; setPreference({ presetId: selected.id, values: { ...selected.values } }); }}>{presets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><button type="button" onClick={() => setPreference({ presetId: preset.id, values: { ...preset.values } })}>Reset to preset defaults</button></div>
+    <h3>{t("Appearance", "外观")}</h3>
+    <div className="appearance-preset"><label>{t("Preset", "预设")}<select value={preset.id} onChange={(event) => { const selected = presets.find((item) => item.id === event.target.value)!; setPreference({ presetId: selected.id, values: { ...selected.values } }); }}>{presets.map((item) => <option key={item.id} value={item.id}>{t("Regular", item.name)}</option>)}</select></label><button type="button" onClick={() => setPreference({ presetId: preset.id, values: { ...preset.values } })}>{t("Reset to preset defaults", "重置为预设默认值")}</button></div>
     <div className="appearance-grid">
-      <label>Theme<select value={value.theme} onChange={(event) => { const theme = event.target.value as Theme; update({ theme, ...themeColors[theme] }); }}><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      <label>{t("Theme", "主题")}<select value={value.theme} onChange={(event) => { const theme = event.target.value as Theme; update({ theme, ...themeColors[theme] }); }}><option value="light">{t("Light", "浅色")}</option><option value="dark">{t("Dark", "深色")}</option></select></label>
       <div />
-      <FontControl label="Interface font" value={value.fontFamily} onChange={(fontFamily) => update({ fontFamily })} />
-      <FontControl label="Code font" value={value.codeFontFamily} code onChange={(codeFontFamily) => update({ codeFontFamily })} />
-      <NumberControl label="Interface size (px)" value={value.fontSize} min={10} max={24} onChange={(fontSize) => update({ fontSize })} />
-      <NumberControl label="Code size (px)" value={value.codeFontSize} min={9} max={24} onChange={(codeFontSize) => update({ codeFontSize })} />
-      <ColorControl label="Background" value={value.background} onChange={(background) => update({ background })} />
-      <ColorControl label="Foreground" value={value.foreground} onChange={(foreground) => update({ foreground })} />
+      <FontControl label={t("Interface font", "界面字体")} value={value.fontFamily} onChange={(fontFamily) => update({ fontFamily })} />
+      <FontControl label={t("Code font", "代码字体")} value={value.codeFontFamily} code onChange={(codeFontFamily) => update({ codeFontFamily })} />
+      <NumberControl label={t("Interface size (px)", "界面字号（px）")} value={value.fontSize} min={10} max={24} onChange={(fontSize) => update({ fontSize })} />
+      <NumberControl label={t("Code size (px)", "代码字号（px）")} value={value.codeFontSize} min={9} max={24} onChange={(codeFontSize) => update({ codeFontSize })} />
+      <ColorControl label={t("Background", "背景")} value={value.background} onChange={(background) => update({ background })} />
+      <ColorControl label={t("Foreground", "前景")} value={value.foreground} onChange={(foreground) => update({ foreground })} />
     </div>
-    <label>Contrast <span className="appearance-contrast"><input aria-label="Appearance contrast" type="range" min={0} max={100} value={value.contrast} onChange={(event) => update({ contrast: Number(event.target.value) })} /><output>{value.contrast}</output></span></label>
-    <p className="muted appearance-note">Changes are saved automatically. Contrast adjusts surfaces, borders, and secondary text.</p>
+    <label>{t("Contrast", "对比度")} <span className="appearance-contrast"><input aria-label={t("Appearance contrast", "外观对比度")} type="range" min={0} max={100} value={value.contrast} onChange={(event) => update({ contrast: Number(event.target.value) })} /><output>{value.contrast}</output></span></label>
+    <p className="muted appearance-note">{t("Changes are saved automatically. Contrast adjusts surfaces, borders, and secondary text.", "调整会自动保留。对比度用于调整背景层次、边框和次要文字。")}</p>
     {saveError && <p className="error-text" role="alert">{saveError}</p>}
   </section>;
 }

@@ -24,6 +24,7 @@ interface Run {
   inputs: Map<UserMessage, string>;
   queued: { message: UserMessage; kind: "steer" | "followUp" }[];
   accepting: boolean;
+  snapshot?: { id: string; cwd: string };
 }
 interface PendingApproval {
   approval: Approval;
@@ -55,12 +56,12 @@ export class SessionManager extends EventEmitter {
   constructor(home?: string) {
     super();
     this.config = new ConfigStore(home);
-    this.store = new EventStore(this.config.home);
+    this.store = new EventStore(this.config.home, (english, chinese) => this.config.text(english, chinese));
     this.models = new ModelRegistry(this.config, (data) => this.emit("auth", data));
-    this.workspaces = new WorkspaceManager(this.config.home);
+    this.workspaces = new WorkspaceManager(this.config.home, (english, chinese) => this.config.text(english, chinese));
     this.tasks = new TaskManager(this.config.home);
     for (const session of this.store.list()) {
-      if (isBusy(session.status)) this.append(session.id, "run.interrupted", { message: "The service stopped while this session was active. Continue to resume." });
+      if (isBusy(session.status)) this.append(session.id, "run.interrupted", { message: this.config.text("The service stopped while this session was active. Continue to resume.", "此会话运行期间服务已停止，发送消息即可继续。") });
     }
   }
   append(id: string, type: string, data: Record<string, unknown>): SessionEvent {
@@ -99,13 +100,12 @@ export class SessionManager extends EventEmitter {
     return manager;
   }
   async create(params: RpcMethods["session.create"]["params"]): Promise<Session> {
-    let cwd = await realpath(resolve(params.cwd));
-    if (!(await stat(cwd)).isDirectory()) throw new Error("Working directory must be a directory");
     const parent = params.parentSessionId ? this.store.get(params.parentSessionId) : undefined;
-    const projectPath = parent ? parent.projectPath || parent.cwd : cwd;
+    let cwd = await this.resolveWorkspace(params.cwd ?? parent?.cwd);
+    const projectPath = parent ? parent.projectPath === undefined ? parent.cwd : parent.projectPath : params.cwd ? cwd : null;
     const config = this.config.get();
     const model = params.model || config.defaultModel;
-    this.models.resolve(model);
+    await this.models.prepare(model);
     let worktree: string | undefined;
     if (params.worktree) {
       const info = await this.workspaces.createWorktree(cwd, { name: randomUUID().slice(0, 8), ref: params.branch });
@@ -116,6 +116,37 @@ export class SessionManager extends EventEmitter {
     this.emit("event", this.store.events(session.id)[0]);
     return session;
   }
+  private async resolveWorkspace(cwd?: string | null): Promise<string> {
+    if (!cwd) {
+      cwd = join(this.config.get().defaultWorkspace, randomUUID());
+      await mkdir(cwd, { recursive: true });
+    }
+    const path = await realpath(resolve(cwd));
+    if (!(await stat(path)).isDirectory()) throw new Error(this.config.text("Working directory must be a directory", "工作路径必须是一个目录"));
+    return path;
+  }
+  async workspace(params: RpcMethods["session.workspace"]["params"]): Promise<Session> {
+    return this.operate(params.sessionId, async () => {
+      const session = this.assertIdle(params.sessionId);
+      if (this.tasks.list(session.id).some((task) => task.status === "running")) throw new Error(this.config.text("Stop this session's background tasks before changing its workspace", "更改工作区前，请先停止此会话的后台任务"));
+      let cwd = params.cwd === undefined ? session.cwd : await this.resolveWorkspace(params.cwd);
+      const projectPath = params.cwd === undefined ? session.projectPath === undefined ? session.cwd : session.projectPath : params.cwd === null ? null : cwd;
+      let worktree = params.cwd === undefined ? session.worktree : undefined;
+      if (params.worktree && !worktree) {
+        const info = await this.workspaces.createWorktree(cwd, { name: randomUUID().slice(0, 8), ref: params.branch });
+        cwd = info.path;
+        worktree = info.path;
+      } else if (params.worktree === false && worktree) {
+        cwd = projectPath ?? await this.resolveWorkspace();
+        worktree = undefined;
+      }
+      await this.mcps.get(session.id)?.close();
+      this.mcps.delete(session.id);
+      this.contexts.delete(session.id);
+      this.append(session.id, "workspace.changed", { cwd, projectPath, worktree });
+      return this.store.get(session.id);
+    });
+  }
   attach(id: string, afterSeq = 0): SessionView {
     return { session: this.store.get(id), events: this.store.events(id, afterSeq), eventSeq: this.store.events(id).at(-1)?.seq ?? 0,
       approvals: [...this.approvals.values()].filter((pending) => pending.approval.sessionId === id).map((pending) => pending.approval),
@@ -123,13 +154,13 @@ export class SessionManager extends EventEmitter {
   }
   private assertIdle(id: string): Session {
     const session = this.store.get(id);
-    if (this.runs.has(id)) throw new Error("Stop the current run first");
+    if (this.runs.has(id)) throw new Error(this.config.text("Stop the current run first", "请先停止当前运行"));
     return session;
   }
   private async operate<T>(id: string, action: () => Promise<T>): Promise<T> {
-    if (this.closing) throw new Error("The service is stopping");
+    if (this.closing) throw new Error(this.config.text("The service is stopping", "服务正在停止"));
     const operation = (this.operations.get(id) ?? Promise.resolve()).catch(() => {}).then(() => {
-      if (this.closing) throw new Error("The service is stopping");
+      if (this.closing) throw new Error(this.config.text("The service is stopping", "服务正在停止"));
       return action();
     });
     this.operations.set(id, operation);
@@ -140,8 +171,9 @@ export class SessionManager extends EventEmitter {
   }
   private async submitInput(id: string, text: string, attachments: Attachment[] | undefined, options: { tools?: string[]; instructions?: string } | undefined, kind: "steer" | "followUp"): Promise<void> {
     const session = this.store.get(id);
-    if (!text.trim() && !attachments?.length) throw new Error("Enter a message or attach a file");
+    if (!text.trim() && !attachments?.length) throw new Error(this.config.text("Enter a message or attach a file", "请输入消息或添加附件"));
     await this.models.requireAuth(session.model);
+    const snapshot = this.runs.has(id) ? undefined : await this.workspaces.snapshot(session.cwd);
     const extension = await this.extension(session.cwd);
     const command = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
     if (command) text = await extension.expandCommand(command[1]!, command[2] || "");
@@ -154,20 +186,20 @@ export class SessionManager extends EventEmitter {
     if (session.title === "New session") this.append(id, "session.renamed", { title: text.slice(0, 72).replace(/\s+/g, " ") });
     if (options) this.append(id, "session.configured", { ...options });
     this.append(id, "user.message", { text, attachments, message });
-    this.start(id, options);
+    this.start(id, options, snapshot);
   }
   private pendingInputs(id: string): SessionEvent[] {
     const events = this.store.branch(id);
     const consumed = new Set(events.filter((event) => event.type === "message.persisted").map((event) => event.data.sourceEventId));
     return events.filter((event) => ["user.message", "user.steer", "user.followUp"].includes(event.type) && !consumed.has(event.id));
   }
-  private start(id: string, options?: { tools?: string[]; instructions?: string }): void {
-    if (this.closing) throw new Error("The service is stopping");
+  private start(id: string, options?: { tools?: string[]; instructions?: string }, snapshot?: Run["snapshot"]): void {
+    if (this.closing) throw new Error(this.config.text("The service is stopping", "服务正在停止"));
     const pending = this.pendingInputs(id);
     if (!pending.length) return;
     const configured = options ?? this.store.branch(id).findLast((event) => event.type === "session.configured")?.data as { tools?: string[]; instructions?: string } | undefined;
     const run: Run = { controller: new AbortController(), ...configured, prompts: pending.map((event) => event.data.message as UserMessage),
-      inputs: new Map(pending.map((event) => [event.data.message as UserMessage, event.id])), queued: [], accepting: true };
+      inputs: new Map(pending.map((event) => [event.data.message as UserMessage, event.id])), queued: [], accepting: true, snapshot };
     this.runs.set(id, run);
     this.append(id, "turn.started", {});
     run.promise = this.execute(id, run);
@@ -179,7 +211,7 @@ export class SessionManager extends EventEmitter {
   }
   private queueMessage(id: string, text: string, message: UserMessage, kind: "steer" | "followUp", attachments?: Attachment[]): void {
     const run = this.runs.get(id);
-    if (!run) throw new Error("This session has no active run");
+    if (!run) throw new Error(this.config.text("This session has no active run", "此会话当前没有正在运行的任务"));
     const event = this.append(id, `user.${kind}`, { text, message, attachments });
     run.inputs.set(message, event.id);
     if (!run.accepting) return;
@@ -192,7 +224,7 @@ export class SessionManager extends EventEmitter {
     const run = this.runs.get(id);
     run?.controller.abort();
     run?.agent?.abort();
-    for (const pending of this.approvals.values()) if (pending.approval.sessionId === id) pending.reject(new Error("Run aborted"));
+    for (const pending of this.approvals.values()) if (pending.approval.sessionId === id) pending.reject(new Error(this.config.text("Run aborted", "运行已停止")));
   }
   private async requestApproval(approval: Approval, signal?: AbortSignal): Promise<{ allow: boolean; answer?: string }> {
     return new Promise((resolve, reject) => {
@@ -204,7 +236,7 @@ export class SessionManager extends EventEmitter {
         this.live(approval.sessionId, "status.changed", { status: waiting ? "waiting_approval" : "running" });
         if (error) reject(error); else resolve(response!);
       };
-      const abort = () => finish(undefined, new Error("Run aborted"));
+      const abort = () => finish(undefined, new Error(this.config.text("Run aborted", "运行已停止")));
       this.approvals.set(approval.id, { approval, resolve: (response) => finish(response), reject: (error) => finish(undefined, error) });
       this.append(approval.sessionId, "approval.requested", { approval });
       if (signal?.aborted) abort();
@@ -213,7 +245,7 @@ export class SessionManager extends EventEmitter {
   }
   async respond(params: RpcMethods["approval.respond"]["params"]): Promise<void> {
     const pending = this.approvals.get(params.approvalId);
-    if (!pending) throw new Error("This approval has already been resolved");
+    if (!pending) throw new Error(this.config.text("This approval has already been resolved", "此审批已经处理"));
     if (params.remember && pending.approval.tool !== "ask_user") {
       const rule = { tool: pending.approval.tool, pattern: String(pending.approval.args.command ?? pending.approval.args.path ?? JSON.stringify(pending.approval.args)), action: params.allow ? "allow" as const : "deny" as const };
       if (params.remember === "global") this.config.set({ rules: [...this.config.get().rules, rule] });
@@ -236,23 +268,26 @@ export class SessionManager extends EventEmitter {
     let failure: unknown;
     const beforeWrite = async () => {
       checkpoint ??= this.workspaces.snapshot(session.cwd).then((value) => {
-        this.append(id, "snapshot.created", { snapshotId: value.id, turnId: started.id });
+        this.append(id, "snapshot.created", { snapshotId: value.id, cwd: value.cwd, turnId: started.id });
         return value.id;
       });
       snapshot ??= checkpoint;
       await checkpoint;
     };
     try {
+      const before = run.snapshot ?? await this.workspaces.snapshot(session.cwd);
+      snapshot = checkpoint = Promise.resolve(before.id);
+      this.append(id, "snapshot.created", { snapshotId: before.id, cwd: before.cwd, turnId: started.id, phase: "start" });
       extension = await this.extension(session.cwd);
       const resources = extension;
       const config = this.config.get();
       const authorize = async (tool: string, args: Record<string, unknown>, signal?: AbortSignal, readOnly?: boolean) => {
         const projectRules = await readFile(join(session.cwd, ".voidkagami", "permissions.json"), "utf8").then((data) => JSON.parse(data)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
         const decision = evaluatePermission(session.permissionMode, [...this.config.get().rules, ...projectRules], tool, args, readOnly);
-        if (decision === "deny") throw new Error(`Permission denied for ${tool} in ${session.permissionMode} mode`);
+        if (decision === "deny") throw new Error(this.config.text(`Permission denied for ${tool} in ${session.permissionMode} mode`, `当前 ${session.permissionMode} 权限模式不允许执行 ${tool}`));
         if (decision === "ask") {
           const response = await this.requestApproval({ id: randomUUID(), sessionId: id, tool, args }, signal);
-          if (!response.allow) throw new Error(`User denied ${tool}`);
+          if (!response.allow) throw new Error(this.config.text(`User denied ${tool}`, `用户拒绝执行 ${tool}`));
         }
       };
       const context: ToolContext = {
@@ -264,17 +299,17 @@ export class SessionManager extends EventEmitter {
           const answers: string[] = [];
           for (const question of questions) {
             const response = await this.requestApproval({ id: randomUUID(), sessionId: id, tool: "ask_user", args: {}, question: question.question, options: question.options }, signal);
-            if (!response.allow) throw new Error("User declined to answer");
+            if (!response.allow) throw new Error(this.config.text("User declined to answer", "用户拒绝回答"));
             answers.push(response.answer || "");
           }
           return answers;
         },
         delegate: async (input, signal) => {
           const definition = input.agent ? resources.catalog.agents.find((agent) => agent.name === input.agent) : undefined;
-          if (input.agent && !definition) throw new Error(`Unknown agent: ${input.agent}`);
+          if (input.agent && !definition) throw new Error(this.config.text(`Unknown agent: ${input.agent}`, `未知代理：${input.agent}`));
           const selectedModel = input.model ?? (typeof definition?.metadata.model === "string" ? definition.metadata.model : undefined);
           const separator = selectedModel?.indexOf("/") ?? -1;
-          if (selectedModel && separator < 1) throw new Error("Delegate model must use provider/model-id");
+          if (selectedModel && separator < 1) throw new Error(this.config.text("Delegate model must use provider/model-id", "子代理模型必须使用 provider/model-id 格式"));
           const model = selectedModel ? { provider: selectedModel.slice(0, separator), id: selectedModel.slice(separator + 1) } : session.model;
           signal?.throwIfAborted();
           const configuredMode = definition?.metadata.permissionMode;
@@ -305,7 +340,7 @@ export class SessionManager extends EventEmitter {
       await mcp.configure(config.mcpServers);
       tools.push(...mcp.tools());
       if (run.tools) tools = tools.filter((tool) => run.tools!.includes(tool.name));
-      if (run.controller.signal.aborted) throw new Error("Run aborted");
+      if (run.controller.signal.aborted) throw new Error(this.config.text("Run aborted", "运行已停止"));
       const sessionHook = await resources.runHooks("SessionStart", { sessionId: id, cwd: session.cwd }, config.hooks, run.controller.signal);
       const buildPrompt = async () => [await systemPrompt(session, (await resources.instructionsFor()).map((document) => `Instructions from ${document.path}:\n${document.content}`).join("\n\n"), resources.catalog.skills, resources.catalog.agents), run.instructions, sessionHook.additionalContext].filter(Boolean).join("\n\n");
       const buildContext = async (availableTools: AgentTool[]) => {
@@ -372,18 +407,22 @@ export class SessionManager extends EventEmitter {
       run.accepting = false;
       const aborted = run.controller.signal.aborted;
       try {
+        await extension?.runHooks("Stop", { sessionId: id, status: aborted ? "interrupted" : failure ? "failed" : "completed" }, this.config.get().hooks);
+      } catch (error) {
+        failure ??= error;
+      }
+      try {
         if (snapshot) {
           const beforeSnapshotId = await snapshot;
           const after = await this.workspaces.snapshot(session.cwd);
-          this.append(id, "snapshot.completed", { snapshotId: after.id, beforeSnapshotId, turnId: started.id });
+          this.append(id, "snapshot.completed", { snapshotId: after.id, cwd: after.cwd, beforeSnapshotId, turnId: started.id });
         }
-        await extension?.runHooks("Stop", { sessionId: id, status: aborted ? "interrupted" : failure ? "failed" : "completed" }, this.config.get().hooks);
       } catch (error) {
         failure ??= error;
       }
       this.runs.delete(id);
       const status = aborted ? "interrupted" : failure ? "failed" : "completed";
-      if (aborted || failure) this.append(id, aborted ? "run.interrupted" : "run.error", { message: failure instanceof Error ? failure.message : failure ? String(failure) : "Run aborted" });
+      if (aborted || failure) this.append(id, aborted ? "run.interrupted" : "run.error", { message: failure instanceof Error ? failure.message : failure ? String(failure) : this.config.text("Run aborted", "运行已停止") });
       this.append(id, "turn.ended", { status, cost: this.cost(id) });
       this.live(id, "status.changed", { status });
       if (!this.closing && !aborted && !failure && this.pendingInputs(id).length) this.start(id, { tools: run.tools, instructions: run.instructions });
@@ -433,26 +472,30 @@ export class SessionManager extends EventEmitter {
   async archive(id: string, archived: boolean): Promise<Session> {
     return this.operate(id, async () => {
       const session = archived ? this.assertIdle(id) : this.store.get(id);
-      if (archived && this.tasks.list(id).some((task) => task.status === "running")) throw new Error("Stop background tasks before archiving this session");
+      if (archived && this.tasks.list(id).some((task) => task.status === "running")) throw new Error(this.config.text("Stop background tasks before archiving this session", "归档此会话前，请先停止后台任务"));
       if (Boolean(session.archived) !== archived) this.append(id, "session.archived", { archived });
       return session;
     });
   }
-  selectModel(id: string, model: ModelSelection): Session {
-    this.models.resolve(model);
+  async selectModel(id: string, model: ModelSelection): Promise<Session> {
+    await this.models.prepare(model);
     this.append(id, "model.changed", { model });
     return this.store.get(id);
   }
   mode(id: string, mode: PermissionMode): Session {
-    if (!["ask", "accept_edits", "auto", "plan"].includes(mode)) throw new Error("Unknown permission mode");
+    if (!["ask", "accept_edits", "auto", "plan"].includes(mode)) throw new Error(this.config.text("Unknown permission mode", "未知的权限模式"));
     this.append(id, "mode.changed", { mode });
     return this.store.get(id);
   }
   async diff(id: string, eventId?: string): Promise<string> {
-    const session = this.store.get(id);
     const events = this.store.events(id);
-    const selected = events.find((event) => event.id === (eventId ?? session.headId));
-    if (!selected) throw new Error("Unknown event");
+    const branch = this.store.branch(id);
+    const selected = eventId ? events.find((event) => event.id === eventId)
+      : branch.findLast((event) => event.type === "turn.ended") ?? branch.findLast((event) => event.type === "assistant.message");
+    if (!selected) {
+      if (eventId) throw new Error(this.config.text("Unknown event", "事件不存在"));
+      return "";
+    }
     const origin = selected.data.origin as { sessionId: string; eventId: string } | undefined;
     if (origin) return this.diff(origin.sessionId, origin.eventId);
     const turn = selected.type === "user.message"
@@ -461,25 +504,32 @@ export class SessionManager extends EventEmitter {
     const before = events.find((event) => event.type === "snapshot.created" && event.data.turnId === turn);
     if (!before) return "";
     const after = events.findLast((event) => event.type === "snapshot.completed" && event.data.turnId === turn);
-    return this.workspaces.diff(session.cwd, before.data.snapshotId as string, after?.data.snapshotId as string | undefined);
+    if (!after) throw new Error(this.config.text("This turn has no completed workspace snapshot yet", "此轮尚未生成完整的工作区快照"));
+    return this.workspaces.diff(this.snapshotWorkspace(id, before), before.data.snapshotId as string, after.data.snapshotId as string);
+  }
+  private snapshotWorkspace(id: string, event: SessionEvent): string {
+    if (typeof event.data.cwd === "string") return event.data.cwd;
+    const branch = this.store.branch(id, event.id);
+    const workspace = branch.findLast((entry) => entry.type === "workspace.changed");
+    return workspace ? workspace.data.cwd as string : (branch[0]!.data.session as Session).cwd;
   }
   private async snapshotAt(id: string, eventId: string): Promise<{ cwd: string; id: string } | undefined> {
     const session = this.store.get(id);
     const events = this.store.events(id);
     const selected = events.find((event) => event.id === eventId);
-    if (!selected) throw new Error("Unknown event");
+    if (!selected) throw new Error(this.config.text("Unknown event", "事件不存在"));
     const origin = selected.data.origin as { sessionId: string; eventId: string } | undefined;
     if (origin) return this.snapshotAt(origin.sessionId, origin.eventId);
     const later = events.find((event) => event.seq > selected.seq && ["snapshot.created", "snapshot.completed"].includes(event.type)
       && this.store.branch(id, event.id).some((ancestor) => ancestor.id === eventId));
-    if (later) return { cwd: session.cwd, id: later.data.snapshotId as string };
+    if (later) return { cwd: this.snapshotWorkspace(id, later), id: later.data.snapshotId as string };
     if (eventId === session.headId) {
       const snapshot = await this.workspaces.snapshot(session.cwd);
       return { cwd: session.cwd, id: snapshot.id };
     }
     const branch = this.store.branch(id, eventId);
     const previous = branch.findLast((event) => event.type === "snapshot.completed");
-    if (previous) return { cwd: session.cwd, id: previous.data.snapshotId as string };
+    if (previous) return { cwd: this.snapshotWorkspace(id, previous), id: previous.data.snapshotId as string };
     return branch.find((event) => event.type === "branch.created")?.data.snapshot as { cwd: string; id: string } | undefined;
   }
   async rewind(id: string, eventId: string, restoreFiles = true): Promise<Session> {
@@ -487,10 +537,10 @@ export class SessionManager extends EventEmitter {
   }
   private async rewindIdle(id: string, eventId: string, restoreFiles: boolean): Promise<Session> {
     const session = this.assertIdle(id);
-    if (restoreFiles && this.tasks.list(id).some((task) => task.status === "running")) throw new Error("Stop this session's background tasks before restoring files. Use task.stop or /stop.");
+    if (restoreFiles && this.tasks.list(id).some((task) => task.status === "running")) throw new Error(this.config.text("Stop this session's background tasks before restoring files. Use task.stop or /stop.", "恢复文件前，请先通过 task.stop 或 /stop 停止此会话的后台任务。"));
     const selected = this.store.branch(id).find((event) => event.id === eventId);
-    if (!selected) throw new Error("Event is not on the current branch");
-    if (!["user.message", "assistant.message", "turn.started", "turn.ended"].includes(selected.type)) throw new Error("Rewind requires a submitted user message or an assistant response checkpoint");
+    if (!selected) throw new Error(this.config.text("Event is not on the current branch", "此事件不在当前会话分支上"));
+    if (!["user.message", "assistant.message", "turn.started", "turn.ended"].includes(selected.type)) throw new Error(this.config.text("Rewind requires a submitted user message or an assistant response checkpoint", "请选择已发送的用户消息或助手回复作为回退位置"));
     if (restoreFiles && eventId !== session.headId) {
       const snapshot = await this.snapshotAt(id, eventId);
       if (snapshot) await this.workspaces.restoreInto(snapshot.cwd, session.cwd, snapshot.id);
@@ -504,11 +554,11 @@ export class SessionManager extends EventEmitter {
   }
   private async forkIdle(id: string, eventId: string | undefined, worktree: boolean): Promise<Session> {
     const source = this.assertIdle(id);
-    if (worktree && this.tasks.list(id).some((task) => task.status === "running")) throw new Error("Stop this session's background tasks before copying its workspace. Use task.stop or /stop.");
+    if (worktree && this.tasks.list(id).some((task) => task.status === "running")) throw new Error(this.config.text("Stop this session's background tasks before copying its workspace. Use task.stop or /stop.", "复制工作区前，请先通过 task.stop 或 /stop 停止此会话的后台任务。"));
     const headId = eventId || source.headId!;
     const events = this.store.branch(id, headId);
     const selected = events.at(-1)!;
-    if (eventId && !["user.message", "assistant.message", "turn.started", "turn.ended"].includes(selected.type)) throw new Error("Fork requires a submitted user message or an assistant response checkpoint");
+    if (eventId && !["user.message", "assistant.message", "turn.started", "turn.ended"].includes(selected.type)) throw new Error(this.config.text("Fork requires a submitted user message or an assistant response checkpoint", "请选择已发送的用户消息或助手回复作为分叉位置"));
     const snapshot = await this.snapshotAt(id, headId);
     const child = await this.create({ cwd: source.cwd, title: `${source.title} (fork)`, model: source.model, permissionMode: source.permissionMode, parentSessionId: id, worktree });
     return this.operate(child.id, async () => {

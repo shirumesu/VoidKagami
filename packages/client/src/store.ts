@@ -141,6 +141,12 @@ export class SessionStore {
     if (event.type === "run.interrupted") state.session.status = "interrupted";
     if (event.type === "model.changed" && event.data.model) state.session.model = event.data.model as Session["model"];
     if (event.type === "mode.changed") state.session.permissionMode = event.data.mode as Session["permissionMode"];
+    if (event.type === "workspace.changed") {
+      state.session.cwd = String(event.data.cwd);
+      state.session.projectPath = event.data.projectPath as string | null;
+      state.session.worktree = event.data.worktree as string | undefined;
+      state.context = undefined;
+    }
     if (event.type === "approval.requested") {
       const approval = (event.data.approval || event.data) as unknown as Approval;
       state.approvals = [...state.approvals.filter((item) => item.id !== approval.id), approval]; state.session.status = "waiting_approval";

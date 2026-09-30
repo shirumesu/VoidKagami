@@ -256,6 +256,7 @@ type Awaitable<T> = T | Promise<T>;
 
 export interface SlashCommand {
 	name: string;
+	aliases?: string[];
 	description?: string;
 	argumentHint?: string;
 	// Function to get argument completions for this command
@@ -341,7 +342,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			if (spaceIndex === -1) {
 				const prefix = textBeforeCursor.slice(1);
 				const commandItems = this.commands.map((cmd) => {
-					const name = "name" in cmd ? cmd.name : cmd.value;
+					const canonical = "name" in cmd ? cmd.name : cmd.value;
+					const name = "aliases" in cmd && prefix ? cmd.aliases?.find((alias) => alias.startsWith(prefix)) || canonical : canonical;
 					const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
 					const desc = cmd.description ?? "";
 					const fullDesc = hint ? (desc ? `${hint} — ${desc}` : hint) : desc;
@@ -380,7 +382,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 			const command = this.commands.find((cmd) => {
 				const name = "name" in cmd ? cmd.name : cmd.value;
-				return name === commandName;
+				return name === commandName || ("aliases" in cmd && cmd.aliases?.includes(commandName));
 			});
 			if (!command || !("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
 				return null;

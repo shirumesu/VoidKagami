@@ -9,7 +9,9 @@ export class EventStore {
   private db: DatabaseSync;
   private logs = new Map<string, SessionEvent[]>();
   private sessions = new Map<string, Session>();
-  constructor(home: string) {
+  private text: (english: string, chinese: string) => string;
+  constructor(home: string, text: (english: string, chinese: string) => string = (english) => english) {
+    this.text = text;
     this.home = join(home, "sessions");
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(home, "index.sqlite"));
@@ -30,7 +32,8 @@ export class EventStore {
   }
   private reduce(event: SessionEvent): void {
     if (event.type === "session.created") {
-      this.sessions.set(event.sessionId, { ...(event.data.session as Session), headId: event.id });
+      const session = event.data.session as Session;
+      this.sessions.set(event.sessionId, { ...session, projectPath: session.projectPath === undefined ? session.cwd : session.projectPath, headId: event.id });
       return;
     }
     const session = this.get(event.sessionId);
@@ -38,6 +41,11 @@ export class EventStore {
     session.headId = event.type === "head.moved" ? event.data.headId as string : event.id;
     if (event.type === "session.renamed") session.title = event.data.title as string;
     if (event.type === "session.archived") session.archived = Boolean(event.data.archived);
+    if (event.type === "workspace.changed") {
+      session.cwd = event.data.cwd as string;
+      session.projectPath = event.data.projectPath as string | null;
+      session.worktree = event.data.worktree as string | undefined;
+    }
     if (event.type === "model.changed") session.model = event.data.model as Session["model"];
     if (event.type === "mode.changed") session.permissionMode = event.data.mode as Session["permissionMode"];
     if (event.type === "turn.started") session.status = "running";
@@ -54,7 +62,7 @@ export class EventStore {
   }
   get(id: string): Session {
     const session = this.sessions.get(id);
-    if (!session) throw new Error(`Session not found: ${id}`);
+    if (!session) throw new Error(this.text(`Session not found: ${id}`, `会话不存在：${id}`));
     return session;
   }
   list(query = "", archived?: boolean): Session[] {
@@ -94,7 +102,7 @@ export class EventStore {
     let head = headId;
     while (head) {
       const event = map.get(head);
-      if (!event) throw new Error(`Unknown event: ${head}`);
+      if (!event) throw new Error(this.text(`Unknown event: ${head}`, `事件不存在：${head}`));
       branch.push(event);
       head = event.parentId;
     }

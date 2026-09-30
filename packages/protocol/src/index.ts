@@ -1,5 +1,9 @@
+import type { Language } from "./i18n.ts";
+export { normalizeLanguage, translate } from "./i18n.ts";
+export type { Language } from "./i18n.ts";
+
 export const PROTOCOL_VERSION = 1;
-export const VERSION = "0.1.1";
+export const VERSION = "0.1.2";
 
 export type PermissionMode = "ask" | "accept_edits" | "auto" | "plan";
 export type SessionStatus = "idle" | "running" | "waiting_approval" | "interrupted" | "completed" | "failed";
@@ -10,7 +14,7 @@ export interface Session {
   id: string;
   title: string;
   cwd: string;
-  projectPath?: string;
+  projectPath?: string | null;
   createdAt: string;
   updatedAt: string;
   status: SessionStatus;
@@ -88,6 +92,8 @@ export interface ProviderConfig {
   models: { id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean }[];
 }
 export interface Config {
+  language: Language;
+  defaultWorkspace: string;
   defaultModel: ModelSelection;
   permissionMode: PermissionMode;
   rules: PermissionRule[];
@@ -111,7 +117,7 @@ export interface RpcMethods {
   "hello": { params: { token: string; protocolVersion: number; clientVersion: string }; result: { protocolVersion: number; serverVersion: string; pid: number } };
   "daemon.status": { params: Record<string, never>; result: { pid: number; running: number; sessions: number; uptime: number } };
   "daemon.stop": { params: Record<string, never>; result: { stopped: boolean } };
-  "session.create": { params: { cwd: string; title?: string; model?: ModelSelection; permissionMode?: PermissionMode; worktree?: boolean; branch?: string; parentSessionId?: string }; result: Session };
+  "session.create": { params: { cwd?: string; title?: string; model?: ModelSelection; permissionMode?: PermissionMode; worktree?: boolean; branch?: string; parentSessionId?: string }; result: Session };
   "session.list": { params: { query?: string; archived?: boolean }; result: Session[] };
   "session.attach": { params: { sessionId: string; afterSeq?: number }; result: SessionView };
   "session.detach": { params: { sessionId: string }; result: null };
@@ -121,11 +127,12 @@ export interface RpcMethods {
   "session.abort": { params: { sessionId: string }; result: null };
   "session.rename": { params: { sessionId: string; title: string }; result: Session };
   "session.archive": { params: { sessionId: string; archived: boolean }; result: Session };
+  "session.workspace": { params: { sessionId: string; cwd?: string | null; worktree?: boolean; branch?: string }; result: Session };
   "session.fork": { params: { sessionId: string; eventId?: string; worktree?: boolean }; result: Session };
   "session.rewind": { params: { sessionId: string; eventId: string; restoreFiles?: boolean }; result: Session };
   "session.context": { params: { sessionId: string }; result: ContextInfo };
   "session.compact": { params: { sessionId: string }; result: null };
-  "session.diff": { params: { sessionId: string; eventId?: string }; result: { diff: string } };
+  "session.diff": { params: { sessionId: string; eventId?: string; view?: "last-turn" | "branch"; baseBranch?: string }; result: { diff: string; currentBranch?: string; baseBranch?: string } };
   "session.mode": { params: { sessionId: string; mode: PermissionMode }; result: Session };
   "session.tasks": { params: { sessionId: string }; result: TaskInfo[] };
   "task.stop": { params: { sessionId: string; taskId: string }; result: null };

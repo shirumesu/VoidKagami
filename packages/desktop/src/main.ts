@@ -4,8 +4,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { SocketClient } from "@voidkagami/client";
 import type { Method, RpcMethods, RpcNotification, SessionEvent } from "@voidkagami/protocol";
+import { normalizeLanguage, translate, type Language } from "@voidkagami/protocol";
 
 let window: BrowserWindow | undefined;
+let language: Language = normalizeLanguage(app.getLocale());
+const t = (english: string, chinese: string) => translate(language, english, chinese);
 const client = new SocketClient({ daemonPath: process.env.VOIDKAGAMI_DAEMON || (app.isPackaged ? join(process.resourcesPath, "daemon.js") : resolve(app.getAppPath(), "../daemon/src/index.ts")) });
 const allowed = new Set<Method>(["daemon.status", "session.create", "session.list", "session.attach", "session.detach", "session.send", "session.steer", "session.followUp", "session.abort", "session.rename", "session.archive", "session.fork", "session.rewind", "session.context", "session.compact", "session.diff", "session.mode", "session.tasks", "task.stop", "approval.respond", "model.list", "model.select", "auth.login", "auth.respond", "auth.cancel", "auth.key", "auth.logout", "auth.status", "config.get", "config.set", "project.branches", "project.files", "commands.list"]);
 
@@ -14,17 +17,20 @@ nativeTheme.themeSource = "light";
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on("second-instance", () => { window?.show(); window?.focus(); });
-  ipcMain.handle("rpc", (_event, method: Method, params: RpcMethods[Method]["params"]) => {
+  allowed.add("session.workspace");
+  ipcMain.handle("rpc", async (_event, method: Method, params: RpcMethods[Method]["params"]) => {
     if (!allowed.has(method)) throw new Error(`Unsupported method: ${method}`);
-    return client.request(method, params);
+    const result = await client.request(method, params);
+    if ((method === "config.get" || method === "config.set") && result && "language" in result) language = result.language as Language;
+    return result;
   });
-  ipcMain.handle("choose-folder", async () => { const result = await dialog.showOpenDialog(window!, { properties: ["openDirectory"], title: "Open project" }); return result.canceled ? null : result.filePaths[0]; });
+  ipcMain.handle("choose-folder", async () => { const result = await dialog.showOpenDialog(window!, { properties: ["openDirectory"], title: t("Choose workspace", "选择工作目录") }); return result.canceled ? null : result.filePaths[0]; });
   ipcMain.handle("connection-state", () => client.state);
   ipcMain.handle("set-appearance", (_event, appearance: { theme: "light" | "dark"; background: string }) => {
     nativeTheme.themeSource = appearance.theme;
     window?.setBackgroundColor(appearance.background);
   });
-  ipcMain.handle("choose-attachments", async () => { const result = await dialog.showOpenDialog(window!, { properties: ["openFile", "multiSelections"], title: "Attach files" }); return result.canceled ? [] : result.filePaths; });
+  ipcMain.handle("choose-attachments", async () => { const result = await dialog.showOpenDialog(window!, { properties: ["openFile", "multiSelections"], title: t("Attach files", "添加文件") }); return result.canceled ? [] : result.filePaths; });
   ipcMain.handle("import-attachments", async (_event, files: { name: string; data: ArrayBuffer }[]) => Promise.all(files.map(async (file) => {
     const directory = join(app.getPath("userData"), "attachments", randomUUID());
     await mkdir(directory, { recursive: true });
@@ -38,7 +44,7 @@ else {
     if (message.method !== "event" || window?.isFocused()) return;
     const event = message.params as SessionEvent;
     if (["turn.ended", "approval.requested", "run.error"].includes(event.type) && Notification.isSupported()) {
-      const notification = new Notification({ title: event.type === "approval.requested" ? "VoidKagami needs your input" : event.type === "run.error" ? "Task failed" : "Task finished", body: String(event.data.message || "Open VoidKagami to continue.") });
+      const notification = new Notification({ title: event.type === "approval.requested" ? t("VoidKagami needs your input", "VoidKagami 需要你的确认") : event.type === "run.error" ? t("Task failed", "任务失败") : t("Task finished", "任务完成"), body: String(event.data.message || t("Open VoidKagami to continue.", "打开 VoidKagami 继续。")) });
       notification.on("click", () => { window?.show(); window?.focus(); }); notification.show();
     }
   });

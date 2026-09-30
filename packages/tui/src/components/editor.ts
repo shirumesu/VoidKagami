@@ -2300,6 +2300,8 @@ export class Editor implements Component, Focusable {
 		}
 
 		this.cancelAutocompleteRequest();
+		// Suggestions belong to the previous input until the new request completes.
+		this.clearAutocompleteUi();
 		const startToken = ++this.autocompleteStartToken;
 
 		const debounceMs = this.getAutocompleteDebounceMs(options);

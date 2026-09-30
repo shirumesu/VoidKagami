@@ -8,8 +8,9 @@ export interface WorktreeInfo { path: string; branch: string; }
 
 export class WorkspaceManager {
 	readonly dataDir: string;
+	private text: (english: string, chinese: string) => string;
 	private queues = new Map<string, Promise<unknown>>();
-	constructor(dataDir: string) { this.dataDir = dataDir; }
+	constructor(dataDir: string, text: (english: string, chinese: string) => string = (english) => english) { this.dataDir = dataDir; this.text = text; }
 
 	private async repository(cwd: string): Promise<{ cwd: string; gitDir: string }> {
 		const workspace = await realpath(cwd);
@@ -82,10 +83,36 @@ export class WorkspaceManager {
 		});
 	}
 
+	async branchDiff(cwd: string, requestedBase?: string): Promise<{ diff: string; currentBranch: string; baseBranch: string }> {
+		const repository = (await runProcess("git", ["rev-parse", "--show-toplevel"], { cwd })).stdout.trim();
+		const branch = await runProcess("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: repository, acceptedCodes: [0, 1] });
+		const currentBranch = branch.stdout.trim() || (await runProcess("git", ["rev-parse", "--short", "HEAD"], { cwd: repository })).stdout.trim();
+		let baseBranch = requestedBase;
+		if (!baseBranch) {
+			const upstream = await runProcess("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { cwd: repository, acceptedCodes: [0, 128] });
+			const remoteHead = upstream.code === 0 ? undefined : await runProcess("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { cwd: repository, acceptedCodes: [0, 1, 128] });
+			const refs = (await runProcess("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"], { cwd: repository })).stdout.trim().split("\n");
+			baseBranch = upstream.stdout.trim() || remoteHead?.stdout.trim()
+				|| ["origin/main", "origin/master", "main", "master"].find((ref) => refs.includes(ref)) || currentBranch;
+		}
+		const verified = await runProcess("git", ["rev-parse", "--verify", "--end-of-options", `${baseBranch}^{commit}`], { cwd: repository, acceptedCodes: [0, 128] });
+		if (verified.code !== 0) throw new Error(this.text(`Cannot review changes against ${baseBranch}: the Git reference does not exist`, `无法与 ${baseBranch} 比较：Git 引用不存在`));
+		const mergeBase = await runProcess("git", ["merge-base", verified.stdout.trim(), "HEAD"], { cwd: repository, acceptedCodes: [0, 1, 128] });
+		if (mergeBase.code !== 0) throw new Error(this.text(`Cannot review changes against ${baseBranch}: the branches have no common commit`, `无法与 ${baseBranch} 比较：两个分支没有共同提交`));
+		const tracked = await runProcess("git", ["diff", "--no-ext-diff", "--no-color", mergeBase.stdout.trim(), "--"], { cwd: repository });
+		const untracked = await runProcess("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: repository });
+		const diffs = [tracked.stdout];
+		for (const path of untracked.stdout.split("\0").filter(Boolean)) {
+			const result = await runProcess("git", ["diff", "--no-index", "--no-ext-diff", "--no-color", "--", process.platform === "win32" ? "NUL" : "/dev/null", path], { cwd: repository, acceptedCodes: [0, 1] });
+			diffs.push(result.stdout);
+		}
+		return { diff: diffs.filter(Boolean).join("\n"), currentBranch, baseBranch };
+	}
+
 	async createWorktree(cwd: string, options: { name: string; ref?: string }): Promise<WorktreeInfo> {
 		const repository = (await runProcess("git", ["rev-parse", "--show-toplevel"], { cwd })).stdout.trim();
 		const name = options.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-		if (!name) throw new Error("A worktree name is required");
+		if (!name) throw new Error(this.text("A worktree name is required", "请填写工作树名称"));
 		const path = resolve(this.dataDir, "worktrees", `${basename(repository)}-${name}`);
 		const branch = `voidkagami/${name}`;
 		await mkdir(join(this.dataDir, "worktrees"), { recursive: true });

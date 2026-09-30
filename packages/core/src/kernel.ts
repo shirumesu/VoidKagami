@@ -26,15 +26,18 @@ export class Kernel extends SessionManager {
     "session.abort": (params) => { this.abort(params.sessionId); return null; },
     "session.rename": (params) => this.rename(params.sessionId, params.title),
     "session.archive": (params) => this.archive(params.sessionId, params.archived),
+    "session.workspace": (params) => this.workspace(params),
     "session.fork": (params) => this.fork(params.sessionId, params.eventId, params.worktree ?? false),
     "session.rewind": (params) => this.rewind(params.sessionId, params.eventId, params.restoreFiles ?? true),
     "session.context": (params) => this.context(params.sessionId),
     "session.compact": async (params) => { await this.compact(params.sessionId); return null; },
-    "session.diff": async (params) => ({ diff: await this.diff(params.sessionId, params.eventId) }),
+    "session.diff": async (params) => params.view === "branch"
+      ? this.workspaces.branchDiff(this.store.get(params.sessionId).cwd, params.baseBranch)
+      : { diff: await this.diff(params.sessionId, params.eventId) },
     "session.mode": (params) => this.mode(params.sessionId, params.mode),
     "session.tasks": (params) => { this.store.get(params.sessionId); return this.tasks.list(params.sessionId); },
     "task.stop": (params) => {
-      if (this.tasks.get(params.taskId).sessionId !== params.sessionId) throw new Error("Task belongs to another session");
+      if (this.tasks.get(params.taskId).sessionId !== params.sessionId) throw new Error(this.config.text("Task belongs to another session", "此任务属于另一个会话"));
       this.tasks.stop(params.taskId); return null;
     },
     "approval.respond": async (params) => { await this.respond(params); return null; },
@@ -44,7 +47,7 @@ export class Kernel extends SessionManager {
     "auth.respond": (params) => { this.models.respond(params.loginId, params.value); return null; },
     "auth.cancel": (params) => { this.models.cancel(params.loginId); return null; },
     "auth.key": (params) => {
-      if (!params.provider || !params.apiKey.trim()) throw new Error("Provider and API key are required");
+      if (!params.provider || !params.apiKey.trim()) throw new Error(this.config.text("Provider and API key are required", "请填写供应商和 API 密钥"));
       this.models.credentials.set(params.provider, { type: "api_key", apiKey: params.apiKey.trim() }); return null;
     },
     "auth.logout": (params) => { this.models.credentials.set(params.provider); return null; },

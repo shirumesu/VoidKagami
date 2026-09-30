@@ -1,8 +1,9 @@
 import { Container, Input, SelectList, Text, matchesKey } from "@voidkagami/tui";
+import { t } from "./i18n.ts";
 import type { SelectItem, SelectListTheme } from "@voidkagami/tui";
 
 export class SearchPicker extends Container {
-  private input = new Input({ prompt: "/ ", placeholder: "Type to search" });
+  private input = new Input({ prompt: "/ ", placeholder: t("Type to search", "输入以搜索") });
   private list!: SelectList;
   private items: SelectItem[];
   private theme: SelectListTheme;
@@ -12,7 +13,7 @@ export class SearchPicker extends Container {
 
   constructor(items: SelectItem[], theme: SelectListTheme) {
     super();
-    this.items = items; this.theme = theme;
+    this.items = items; this.theme = { ...theme, noMatch: () => theme.noMatch(t("  No matches", "  没有匹配项")) };
     this.input.focused = true;
     this.filter();
   }
@@ -33,7 +34,7 @@ export class SearchPicker extends Container {
     this.clear();
     this.addChild(this.input);
     this.addChild(this.list);
-    this.addChild(new Text(this.theme.description("↑↓ select · Enter confirm · Esc cancel"), 1, 0));
+    this.addChild(new Text(this.theme.description(t("↑↓ select · Enter confirm · Esc cancel", "↑↓ 选择 · Enter 确认 · Esc 取消")), 1, 0));
   }
 
   handleInput(data: string) {
